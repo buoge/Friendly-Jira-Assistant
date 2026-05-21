@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Friendly Jira Assistant</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand__mark">FJ</span>
+          <div>
+            <h1>Friendly Jira Assistant</h1>
+            <span>v 0.1.0</span>
+          </div>
+        </div>
+        <div class="profile" aria-label="Current user">
+          <div>
+            <strong id="profile-name">Not signed in</strong>
+            <span id="profile-host">Jira not connected</span>
+          </div>
+          <span id="profile-avatar" class="profile__avatar">?</span>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="sidebar" aria-label="Friendly Jira Assistant menu">
+          <section>
+            <h2>TOOLS</h2>
+            <button class="menu-item" type="button" data-view-target="story-subtasks">
+              <span class="menu-item__icon" aria-hidden="true">T</span>
+              <span>子任务拆分</span>
+            </button>
+          </section>
+
+          <section>
+            <h2>SETTINGS</h2>
+            <button class="menu-item menu-item--active" type="button" data-view-target="jira-settings">
+              <span class="menu-item__icon" aria-hidden="true">S</span>
+              <span>Jira Server Url</span>
+            </button>
+          </section>
+        </aside>
+
+        <section class="content">
+          <section class="view view--active" data-view="jira-settings">
+            <div class="content__heading">
+              <div>
+                <p>Settings</p>
+                <h2>Jira Server Url</h2>
+              </div>
+              <span id="connection-status" class="status-badge status-badge--warning">Not configured</span>
+            </div>
+
+            <form id="jira-url-form" class="settings-panel" novalidate>
+              <label class="field" for="jira-url">
+                <span>Jira Server Url</span>
+                <input
+                  id="jira-url"
+                  name="jira-url"
+                  type="url"
+                  placeholder="https://your-team.atlassian.net"
+                  autocomplete="url"
+                />
+              </label>
+              <p id="jira-url-help" class="field-help">
+                Add the base URL of your Jira site. The assistant will use it as the starting point for Jira workflows.
+              </p>
+              <label class="field" for="jira-project-filter">
+                <span>项目</span>
+                <input
+                  id="jira-project-filter"
+                  name="jira-project-filter"
+                  list="jira-project-options"
+                  placeholder="输入项目名称或 key"
+                  autocomplete="off"
+                />
+                <datalist id="jira-project-options"></datalist>
+              </label>
+              <p class="field-help">选择一次默认项目，后续功能会自动使用；需要切换项目时回到这里修改后保存。</p>
+              <div class="form-actions">
+                <button id="save-jira-url" type="submit">Save Settings</button>
+                <button id="clear-jira-url" class="button-secondary" type="button">Clear</button>
+              </div>
+              <p id="jira-url-message" class="form-message" role="status"></p>
+            </form>
+          </section>
+
+          <section class="view" data-view="story-subtasks">
+            <div class="content__heading">
+              <div>
+                <p>Tools</p>
+                <h2>子任务拆分</h2>
+              </div>
+            </div>
+
+            <div class="filter-panel">
+              <p id="story-project-summary" class="filter-summary">当前项目：未配置</p>
+              <div class="filter-grid">
+                <label class="field" for="story-board-filter">
+                  <span>迭代看板</span>
+                  <input
+                    id="story-board-filter"
+                    name="story-board-filter"
+                    list="story-board-options"
+                    placeholder="输入迭代看板名称"
+                    autocomplete="off"
+                  />
+                  <datalist id="story-board-options"></datalist>
+                </label>
+              </div>
+
+              <div class="form-actions">
+                <button id="apply-story-filters" type="button">应用过滤</button>
+              </div>
+              <p id="story-filter-summary" class="form-message" role="status">当前显示配置项目和全部迭代看板。</p>
+            </div>
+
+            <section class="issues-panel" aria-labelledby="story-issues-heading">
+              <div class="issues-panel__heading">
+                <div>
+                  <h3 id="story-issues-heading">待拆分事项</h3>
+                  <p id="story-issues-count">选择迭代看板后点击应用过滤。</p>
+                </div>
+              </div>
+              <div id="story-issues-list" class="issues-list"></div>
+            </section>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
