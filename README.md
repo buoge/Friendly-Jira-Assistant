@@ -2,6 +2,17 @@
 
 Friendly Jira Assistant is a Manifest V3 browser extension scaffold for Jira pages.
 
+## Screenshots
+### jira server setting:
+![jira server setting](./imgs/1-jira-settings.png)
+
+### sprint info:
+![sprint info](./imgs/2-subtask-menu.png)
+
+### subtask breakdown:
+![subtask breakdown](./imgs/3-subtask-breakdown.png)
+
+
 ## Project Structure
 
 ```text

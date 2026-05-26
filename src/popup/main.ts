@@ -1,9 +1,12 @@
 import "./styles.css";
 import {
+  createJiraSubtaskWithWebForm,
   fetchBoardSprintIssueGroups,
   fetchJiraProjects,
   fetchProjectBoards,
+  updateJiraIssueFields,
   type JiraBoardIssue,
+  type JiraIssueFields,
   type JiraSprintIssueGroup
 } from "../shared/jiraData";
 import {
@@ -25,6 +28,27 @@ type StoryBoardConfig = {
   value: string;
 };
 
+type IssueWithSubtasks = JiraBoardIssue & {
+  subtasks: JiraBoardIssue[];
+};
+
+type SubtaskCategory = {
+  primary: string;
+  primaryId: string;
+  secondary: string;
+  secondaryId: string;
+};
+
+type SubtaskDraft = {
+  category: SubtaskCategory;
+  originalEstimate?: string;
+  summary: string;
+};
+
+type SubtaskCategoryOption = SubtaskCategory & {
+  label: string;
+};
+
 type SaveProjectConfigResult =
   | {
       ok: true;
@@ -39,7 +63,104 @@ const storageKey = "jiraServerUrl";
 const profileStorageKey = "jiraProfile";
 const projectStorageKey = "jiraProject";
 const storyBoardStorageKey = "storyBoard";
-
+const subtaskCategoryOptions: SubtaskCategoryOption[] = [
+  {
+    label: "开发工作 / 编码开发-前端",
+    primary: "开发工作",
+    primaryId: "41359",
+    secondary: "编码开发-前端",
+    secondaryId: "41364"
+  },
+  {
+    label: "开发工作 / 编码开发-后端",
+    primary: "开发工作",
+    primaryId: "41359",
+    secondary: "编码开发-后端",
+    secondaryId: "41365"
+  },
+  {
+    label: "开发工作 / 开发自测",
+    primary: "开发工作",
+    primaryId: "41359",
+    secondary: "开发自测",
+    secondaryId: "41366"
+  },
+  {
+    label: "开发工作 / MiniShow",
+    primary: "开发工作",
+    primaryId: "41359",
+    secondary: "MiniShow",
+    secondaryId: "41367"
+  },
+  {
+    label: "开发工作 / 代码公审",
+    primary: "开发工作",
+    primaryId: "41359",
+    secondary: "代码公审",
+    secondaryId: "41368"
+  },
+  {
+    label: "测试工作 / 用例编写",
+    primary: "测试工作",
+    primaryId: "41372",
+    secondary: "用例编写",
+    secondaryId: "41377"
+  },
+  {
+    label: "测试工作 / 功能测试",
+    primary: "测试工作",
+    primaryId: "41372",
+    secondary: "功能测试",
+    secondaryId: "41380"
+  }
+];
+const fixedSubtaskDrafts: SubtaskDraft[] = [
+  {
+    summary: "开发自测",
+    category: {
+      primary: "开发工作",
+      primaryId: "41359",
+      secondary: "开发自测",
+      secondaryId: "41366"
+    }
+  },
+  {
+    summary: "code review",
+    category: {
+      primary: "开发工作",
+      primaryId: "41359",
+      secondary: "代码公审",
+      secondaryId: "41368"
+    }
+  },
+  {
+    summary: "mini show",
+    category: {
+      primary: "开发工作",
+      primaryId: "41359",
+      secondary: "MiniShow",
+      secondaryId: "41367"
+    }
+  },
+  {
+    summary: "测试用例编写",
+    category: {
+      primary: "测试工作",
+      primaryId: "41372",
+      secondary: "用例编写",
+      secondaryId: "41377"
+    }
+  },
+  {
+    summary: "测试用例执行",
+    category: {
+      primary: "测试工作",
+      primaryId: "41372",
+      secondary: "功能测试",
+      secondaryId: "41380"
+    }
+  }
+];
 const jiraUrlForm = document.querySelector<HTMLFormElement>("#jira-url-form");
 const jiraUrlInput = document.querySelector<HTMLInputElement>("#jira-url");
 const clearJiraUrlButton = document.querySelector<HTMLButtonElement>("#clear-jira-url");
@@ -608,11 +729,17 @@ async function loadStoryIssues() {
       currentProjectConfig.key,
       boardConfig.label
     );
-    const issueCount = sprintIssueGroups.reduce((total, group) => total + group.issues.length, 0);
+    const issueCount = sprintIssueGroups.reduce((total, group) => total + getIssuesWithSubtasks(group.issues).length, 0);
+    const subtaskCount = sprintIssueGroups.reduce(
+      (total, group) => total + getIssuesWithSubtasks(group.issues).reduce((sum, issue) => sum + issue.subtasks.length, 0),
+      0
+    );
 
     renderStoryIssueGroups(sprintIssueGroups);
     setStoryFilterMessage(`当前过滤：${projectText}，${boardConfig.label}。`, "success");
-    setStoryIssuesCount(`共加载 ${sprintIssueGroups.length} 个进行中/未开始迭代，${issueCount} 个待拆分事项。`);
+    setStoryIssuesCount(
+      `共加载 ${sprintIssueGroups.length} 个进行中/未开始迭代，${issueCount} 个故事/任务，${subtaskCount} 个子任务。`
+    );
   } catch (error) {
     renderStoryIssueGroups([]);
     setStoryIssuesCount("加载失败。");
@@ -682,7 +809,7 @@ function renderStoryIssues(issues: JiraBoardIssue[]) {
     return;
   }
 
-  storyIssuesList.replaceChildren(...issues.map((issue) => createIssueElement(issue)));
+  storyIssuesList.replaceChildren(...issues.map((issue) => createIssueElement({ ...issue, subtasks: [] })));
 }
 
 function renderStoryIssueGroups(groups: JiraSprintIssueGroup[]) {
@@ -704,6 +831,7 @@ function renderStoryIssueGroups(groups: JiraSprintIssueGroup[]) {
 function createSprintGroupElement(group: JiraSprintIssueGroup) {
   const groupElement = document.createElement("section");
   groupElement.className = "sprint-group";
+  groupElement.classList.toggle("sprint-group--active", group.sprint.state === "active");
 
   const headerElement = document.createElement("button");
   headerElement.className = "sprint-group__heading";
@@ -727,7 +855,10 @@ function createSprintGroupElement(group: JiraSprintIssueGroup) {
 
   const metaElement = document.createElement("span");
   metaElement.className = "sprint-group__meta";
-  metaElement.textContent = `${getSprintStateLabel(group.sprint.state)} · ${group.issues.length} 个事项`;
+  const issueTree = getIssuesWithSubtasks(group.issues);
+  const subtaskCount = issueTree.reduce((total, issue) => total + issue.subtasks.length, 0);
+
+  metaElement.textContent = `${getSprintStateLabel(group.sprint.state)} · ${issueTree.length} 个故事/任务 · ${subtaskCount} 个子任务`;
 
   titleElement.append(chevronElement, titleTextElement);
   headerElement.append(titleElement, metaElement);
@@ -735,9 +866,9 @@ function createSprintGroupElement(group: JiraSprintIssueGroup) {
   const issueListElement = document.createElement("div");
   issueListElement.className = "sprint-group__issues";
   issueListElement.hidden = true;
-  issueListElement.replaceChildren(...group.issues.map((issue) => createIssueElement(issue)));
+  issueListElement.replaceChildren(...issueTree.map((issue) => createIssueElement(issue)));
 
-  if (!group.issues.length) {
+  if (!issueTree.length) {
     const emptyElement = document.createElement("p");
     emptyElement.className = "sprint-group__empty";
     emptyElement.textContent = "该迭代暂无用户故事或任务。";
@@ -766,7 +897,65 @@ function getSprintStateLabel(state: string) {
   return state;
 }
 
-function createIssueElement(issue: JiraBoardIssue) {
+function getIssuesWithSubtasks(issues: JiraBoardIssue[]): IssueWithSubtasks[] {
+  const topLevelIssues = getTopLevelIssues(issues);
+  const subtasksByParentKey = new Map<string, JiraBoardIssue[]>();
+  const subtasksByParentId = new Map<string, JiraBoardIssue[]>();
+
+  getSubtaskIssues(issues).forEach((subtask) => {
+    const parentKey = subtask.fields.parent?.key;
+    const parentId = subtask.fields.parent?.id;
+
+    if (parentKey) {
+      appendIssueToMap(subtasksByParentKey, parentKey, subtask);
+    }
+
+    if (parentId) {
+      appendIssueToMap(subtasksByParentId, parentId, subtask);
+    }
+  });
+
+  return topLevelIssues.map((issue) => {
+    const subtasks = [
+      ...(subtasksByParentKey.get(issue.key) ?? []),
+      ...(subtasksByParentId.get(issue.id) ?? []),
+      ...(issue.fields.subtasks ?? [])
+    ];
+    const seenSubtaskIds = new Set<string>();
+
+    return {
+      ...issue,
+      subtasks: subtasks.filter((subtask) => {
+        if (seenSubtaskIds.has(subtask.id)) {
+          return false;
+        }
+
+        seenSubtaskIds.add(subtask.id);
+        return true;
+      })
+    };
+  });
+}
+
+function appendIssueToMap(issueMap: Map<string, JiraBoardIssue[]>, key: string, issue: JiraBoardIssue) {
+  issueMap.set(key, [...(issueMap.get(key) ?? []), issue]);
+}
+
+function getTopLevelIssues(issues: JiraBoardIssue[]) {
+  return issues.filter((issue) => !isSubtaskIssue(issue));
+}
+
+function getSubtaskIssues(issues: JiraBoardIssue[]) {
+  return issues.filter(isSubtaskIssue);
+}
+
+function isSubtaskIssue(issue: JiraBoardIssue) {
+  const issueType = issue.fields.issuetype?.name?.toLowerCase() ?? "";
+
+  return issueType.includes("sub-task") || issueType.includes("subtask") || issueType.includes("子任务");
+}
+
+function createIssueElement(issue: IssueWithSubtasks) {
   const issueElement = document.createElement("article");
   issueElement.className = "issue-row";
 
@@ -775,9 +964,383 @@ function createIssueElement(issue: JiraBoardIssue) {
   const summary = issue.fields.summary ?? "Untitled issue";
   const parentKey = issue.fields.parent?.key;
   const parentSummary = issue.fields.parent?.fields?.summary;
+  const detailId = `issue-subtasks-${issue.id}`;
+
+  const headerElement = document.createElement("button");
+  headerElement.className = "issue-row__header";
+  headerElement.type = "button";
+  headerElement.setAttribute("aria-expanded", "false");
+  headerElement.setAttribute("aria-controls", detailId);
+
+  const typeElement = document.createElement("span");
+  typeElement.className = "issue-row__type";
+  typeElement.textContent = issueType;
+
+  const metaElement = document.createElement("span");
+  metaElement.className = "issue-row__meta";
+
+  const chevronElement = document.createElement("span");
+  chevronElement.className = "issue-row__chevron";
+  chevronElement.textContent = "›";
+  chevronElement.setAttribute("aria-hidden", "true");
+
+  const keyElement = document.createElement("span");
+  keyElement.className = "issue-row__key";
+  keyElement.textContent = issue.key;
+
+  const statusElement = document.createElement("span");
+  statusElement.className = "issue-row__status";
+  statusElement.textContent = status;
+
+  metaElement.append(typeElement, keyElement, statusElement);
+
+  const summaryElement = document.createElement("p");
+  summaryElement.textContent = summary;
+
+  const subtaskCountElement = document.createElement("span");
+  subtaskCountElement.className = "issue-row__subtask-count";
+  subtaskCountElement.textContent = `${issue.subtasks.length} 个子任务`;
+
+  headerElement.append(chevronElement, metaElement, subtaskCountElement);
+  issueElement.append(headerElement, summaryElement);
+
+  if (parentKey || parentSummary) {
+    const parentElement = document.createElement("span");
+    parentElement.className = "issue-row__parent";
+    parentElement.textContent = `父级：${[parentKey, parentSummary].filter(Boolean).join(" · ")}`;
+    issueElement.append(parentElement);
+  }
+
+  const detailElement = document.createElement("div");
+  detailElement.id = detailId;
+  detailElement.className = "issue-row__details";
+  detailElement.hidden = true;
+
+  const subtaskListElement = document.createElement("div");
+  subtaskListElement.className = "issue-row__subtasks";
+
+  if (issue.subtasks.length) {
+    subtaskListElement.replaceChildren(...issue.subtasks.map((subtask) => createSubtaskElement(subtask)));
+  } else {
+    const emptyElement = document.createElement("p");
+    emptyElement.className = "issue-row__subtasks-empty";
+    emptyElement.textContent = "暂无子任务。";
+    subtaskListElement.append(emptyElement);
+  }
+
+  detailElement.append(subtaskListElement, createBatchCreatePanel(issue));
+  issueElement.append(detailElement);
+
+  headerElement.addEventListener("click", () => {
+    const isExpanded = headerElement.getAttribute("aria-expanded") === "true";
+    headerElement.setAttribute("aria-expanded", String(!isExpanded));
+    detailElement.hidden = isExpanded;
+  });
+
+  return issueElement;
+}
+
+function createBatchCreatePanel(issue: IssueWithSubtasks) {
+  const panelElement = document.createElement("section");
+  panelElement.className = "batch-create";
+
+  const headingElement = document.createElement("div");
+  headingElement.className = "batch-create__heading";
+
+  const titleElement = document.createElement("h5");
+  titleElement.textContent = "批量创建子任务";
+
+  const messageElement = document.createElement("p");
+  messageElement.className = "batch-create__message";
+  messageElement.setAttribute("role", "status");
+
+  headingElement.append(titleElement, messageElement);
+
+  const fixedListElement = document.createElement("div");
+  fixedListElement.className = "batch-create__fixed";
+
+  const fixedCheckboxes = fixedSubtaskDrafts.map((draft) => {
+    const labelElement = document.createElement("label");
+    labelElement.className = "batch-create__check";
+
+    const checkboxElement = document.createElement("input");
+    checkboxElement.type = "checkbox";
+    checkboxElement.checked = true;
+    checkboxElement.value = draft.summary;
+
+    const textElement = document.createElement("span");
+    textElement.textContent = draft.summary;
+
+    labelElement.append(checkboxElement, textElement);
+    fixedListElement.append(labelElement);
+    return checkboxElement;
+  });
+
+  const customFieldElement = document.createElement("label");
+  customFieldElement.className = "batch-create__custom";
+
+  const customLabelElement = document.createElement("span");
+  customLabelElement.textContent = "自定义前端/后端任务";
+
+  const customTextareaElement = document.createElement("textarea");
+  customTextareaElement.rows = 3;
+  customTextareaElement.placeholder = "每行一个任务，用逗号分隔名称和预估时间，例如：前端-开发任务1，4h";
+
+  customFieldElement.append(customLabelElement, customTextareaElement);
+
+  const previewElement = document.createElement("ul");
+  previewElement.className = "batch-create__preview";
+
+  const actionsElement = document.createElement("div");
+  actionsElement.className = "batch-create__actions";
+
+  const createButtonElement = document.createElement("button");
+  createButtonElement.type = "button";
+  createButtonElement.textContent = "创建缺失子任务";
+
+  actionsElement.append(createButtonElement);
+  panelElement.append(headingElement, fixedListElement, customFieldElement, previewElement, actionsElement);
+
+  const refreshPreview = () => {
+    const preview = getBatchCreatePreview(issue, fixedCheckboxes, customTextareaElement.value);
+    renderBatchPreview(previewElement, preview);
+    createButtonElement.disabled = preview.creatable.length === 0 || !currentProjectConfig;
+  };
+
+  fixedCheckboxes.forEach((checkbox) => {
+    checkbox.addEventListener("change", refreshPreview);
+  });
+  customTextareaElement.addEventListener("input", refreshPreview);
+  refreshPreview();
+
+  createButtonElement.addEventListener("click", () => {
+    void createMissingSubtasks(issue, fixedCheckboxes, customTextareaElement.value, createButtonElement, messageElement);
+  });
+
+  return panelElement;
+}
+
+function getBatchCreatePreview(issue: IssueWithSubtasks, fixedCheckboxes: HTMLInputElement[], customTaskText: string) {
+  const existingSummaries = new Set(issue.subtasks.map((subtask) => normalizeSummary(subtask.fields.summary ?? "")));
+  const selectedFixedDrafts = fixedSubtaskDrafts.filter((draft, index) => fixedCheckboxes[index]?.checked);
+  const customDraftResult = parseCustomTaskDrafts(customTaskText);
+  const duplicateSummaries = new Set<string>();
+  const creatable: SubtaskDraft[] = [];
+  const skipped: string[] = [];
+
+  [...selectedFixedDrafts, ...customDraftResult.drafts].forEach((draft) => {
+    const normalizedSummary = normalizeSummary(draft.summary);
+
+    if (!normalizedSummary) {
+      return;
+    }
+
+    if (existingSummaries.has(normalizedSummary)) {
+      skipped.push(`${draft.summary}（已存在）`);
+      return;
+    }
+
+    if (duplicateSummaries.has(normalizedSummary)) {
+      skipped.push(`${draft.summary}（重复输入）`);
+      return;
+    }
+
+    duplicateSummaries.add(normalizedSummary);
+    creatable.push(draft);
+  });
+
+  return {
+    creatable,
+    invalid: customDraftResult.invalid,
+    skipped
+  };
+}
+
+function renderBatchPreview(
+  previewElement: HTMLUListElement,
+  preview: { creatable: SubtaskDraft[]; invalid: string[]; skipped: string[] }
+) {
+  const previewItems = [
+    ...preview.creatable.map((draft) => ({
+      text: `${draft.summary}：${draft.category.primary} / ${draft.category.secondary}${draft.originalEstimate ? `，初始预估 ${draft.originalEstimate}` : ""}`,
+      type: "ready"
+    })),
+    ...preview.skipped.map((summary) => ({
+      text: summary,
+      type: "muted"
+    })),
+    ...preview.invalid.map((summary) => ({
+      text: `${summary}（仅支持“前端”或“后端”开头）`,
+      type: "error"
+    }))
+  ];
+
+  if (!previewItems.length) {
+    const emptyElement = document.createElement("li");
+    emptyElement.className = "batch-create__preview-empty";
+    emptyElement.textContent = "选择固定任务或输入自定义任务后会在这里预览。";
+    previewElement.replaceChildren(emptyElement);
+    return;
+  }
+
+  previewElement.replaceChildren(
+    ...previewItems.map((item) => {
+      const itemElement = document.createElement("li");
+      itemElement.dataset.type = item.type;
+      itemElement.textContent = item.text;
+      return itemElement;
+    })
+  );
+}
+
+function parseCustomTaskDrafts(customTaskText: string) {
+  const drafts: SubtaskDraft[] = [];
+  const invalid: string[] = [];
+
+  customTaskText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const parsedLine = parseCustomTaskLine(line);
+      const category = getCustomTaskCategory(parsedLine.summary);
+
+      if (!category) {
+        invalid.push(line);
+        return;
+      }
+
+      drafts.push({
+        category,
+        originalEstimate: parsedLine.originalEstimate,
+        summary: parsedLine.summary
+      });
+    });
+
+  return {
+    drafts,
+    invalid
+  };
+}
+
+function parseCustomTaskLine(line: string) {
+  const [summary = "", originalEstimate = ""] = line.split(/[，,]/, 2).map((part) => part.trim());
+
+  return {
+    originalEstimate,
+    summary
+  };
+}
+
+function getCustomTaskCategory(summary: string): SubtaskCategory | null {
+  if (summary.startsWith("前端")) {
+    return {
+      primary: "开发工作",
+      primaryId: "41359",
+      secondary: "编码开发-前端",
+      secondaryId: "41364"
+    };
+  }
+
+  if (summary.startsWith("后端")) {
+    return {
+      primary: "开发工作",
+      primaryId: "41359",
+      secondary: "编码开发-后端",
+      secondaryId: "41365"
+    };
+  }
+
+  return null;
+}
+
+async function createMissingSubtasks(
+  issue: IssueWithSubtasks,
+  fixedCheckboxes: HTMLInputElement[],
+  customTaskText: string,
+  createButtonElement: HTMLButtonElement,
+  messageElement: HTMLParagraphElement
+) {
+  if (!currentProjectConfig) {
+    showBatchCreateMessage(messageElement, "请先选择 Jira 项目。", "error");
+    return;
+  }
+
+  const preview = getBatchCreatePreview(issue, fixedCheckboxes, customTaskText);
+
+  if (!preview.creatable.length) {
+    showBatchCreateMessage(messageElement, "没有需要创建的子任务。", "error");
+    return;
+  }
+
+  if (!issue.id) {
+    showBatchCreateMessage(messageElement, "缺少父问题 id，无法调用 Jira 原生创建子任务表单。", "error");
+    return;
+  }
+
+  setButtonDisabled(createButtonElement, true);
+  showBatchCreateMessage(messageElement, "正在通过 Jira 原生表单创建子任务...", "success");
+
+  try {
+    const createdKeys: string[] = [];
+
+    for (const draft of preview.creatable) {
+      const createdIssue = await createJiraSubtaskWithWebForm(currentJiraServerUrl, {
+        categoryChildId: draft.category.secondaryId,
+        categoryParentId: draft.category.primaryId,
+        originalEstimate: draft.originalEstimate,
+        parentIssueId: issue.id,
+        summary: draft.summary
+      });
+      createdKeys.push(createdIssue.key);
+    }
+
+    showBatchCreateMessage(
+      messageElement,
+      `已创建 ${createdKeys.length} 个子任务${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
+      "success"
+    );
+    await loadStoryIssues();
+    setStoryFilterMessage(
+      `已为 ${issue.key} 创建 ${createdKeys.length} 个子任务${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
+      "success"
+    );
+  } catch (error) {
+    showBatchCreateMessage(messageElement, getErrorMessage(error), "error");
+  } finally {
+    setButtonDisabled(createButtonElement, false);
+  }
+}
+
+function normalizeSummary(summary: string) {
+  return summary.trim().toLowerCase();
+}
+
+function showBatchCreateMessage(element: HTMLParagraphElement, message: string, type: "error" | "success") {
+  element.textContent = message;
+  element.dataset.type = type;
+}
+
+function createSubtaskElement(issue: JiraBoardIssue) {
+  const issueElement = document.createElement("article");
+  issueElement.className = "subtask-row";
+
+  const issueType = issue.fields.issuetype?.name ?? "子任务";
+  const status = issue.fields.status?.name ?? "No status";
+  const summary = issue.fields.summary ?? "Untitled issue";
+  const category = getIssueSubtaskCategory(issue);
+  const originalEstimate = issue.fields.timetracking?.originalEstimate ?? "";
+  const assigneeName = issue.fields.assignee?.name ?? "";
+  const assigneeLabel = issue.fields.assignee?.displayName ?? assigneeName;
+
+  const mainElement = document.createElement("div");
+  mainElement.className = "subtask-row__main";
+
+  const contentElement = document.createElement("div");
+  contentElement.className = "subtask-row__content";
 
   const metaElement = document.createElement("div");
-  metaElement.className = "issue-row__meta";
+  metaElement.className = "subtask-row__meta";
 
   const typeElement = document.createElement("span");
   typeElement.className = "issue-row__type";
@@ -794,21 +1357,152 @@ function createIssueElement(issue: JiraBoardIssue) {
   statusElement.className = "issue-row__status";
   statusElement.textContent = status;
 
-  metaElement.append(typeElement, keyElement, statusElement);
-
   const summaryElement = document.createElement("p");
   summaryElement.textContent = summary;
 
-  issueElement.append(metaElement, summaryElement);
+  const editorElement = document.createElement("div");
+  editorElement.className = "subtask-row__editor";
 
-  if (parentKey || parentSummary) {
-    const parentElement = document.createElement("span");
-    parentElement.className = "issue-row__parent";
-    parentElement.textContent = `父级：${[parentKey, parentSummary].filter(Boolean).join(" · ")}`;
-    issueElement.append(parentElement);
-  }
+  const categoryField = document.createElement("label");
+  categoryField.className = "subtask-row__field";
+  const categoryLabel = document.createElement("span");
+  categoryLabel.textContent = "任务分类";
+  const categorySelect = document.createElement("select");
+  categorySelect.replaceChildren(
+    createOptionElement("", "未设置"),
+    ...subtaskCategoryOptions.map((option) => createOptionElement(getCategoryOptionValue(option), option.label))
+  );
+  categorySelect.value = category ? getCategoryOptionValue(category) : "";
+  categoryField.append(categoryLabel, categorySelect);
+
+  const estimateField = document.createElement("label");
+  estimateField.className = "subtask-row__field";
+  const estimateLabel = document.createElement("span");
+  estimateLabel.textContent = "初始预估";
+  const estimateInput = document.createElement("input");
+  estimateInput.value = originalEstimate;
+  estimateInput.placeholder = "例如 4h";
+  estimateField.append(estimateLabel, estimateInput);
+
+  const assigneeField = document.createElement("label");
+  assigneeField.className = "subtask-row__field";
+  const assigneeTextLabel = document.createElement("span");
+  assigneeTextLabel.textContent = "经办人";
+  const assigneeInput = document.createElement("input");
+  assigneeInput.value = assigneeName;
+  assigneeInput.placeholder = assigneeLabel || "用户名";
+  assigneeField.append(assigneeTextLabel, assigneeInput);
+
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.textContent = "保存";
+
+  const messageElement = document.createElement("span");
+  messageElement.className = "subtask-row__message";
+  messageElement.setAttribute("role", "status");
+
+  editorElement.append(categoryField, estimateField, assigneeField, saveButton, messageElement);
+  metaElement.append(typeElement, keyElement, statusElement);
+  contentElement.append(metaElement, summaryElement);
+  mainElement.append(contentElement, editorElement);
+  issueElement.append(mainElement);
+
+  saveButton.addEventListener("click", () => {
+    void saveSubtaskEdits(issue, categorySelect, estimateInput, assigneeInput, saveButton, messageElement);
+  });
 
   return issueElement;
+}
+
+function createOptionElement(value: string, label: string) {
+  const optionElement = document.createElement("option");
+  optionElement.value = value;
+  optionElement.textContent = label;
+  return optionElement;
+}
+
+function getCategoryOptionValue(category: SubtaskCategory) {
+  return `${category.primaryId}:${category.secondaryId}`;
+}
+
+function getIssueSubtaskCategory(issue: JiraBoardIssue): SubtaskCategoryOption | null {
+  const fieldValue = issue.fields.customfield_14102;
+
+  if (!fieldValue || typeof fieldValue !== "object") {
+    return null;
+  }
+
+  const categoryValue = fieldValue as { child?: { id?: string; value?: string }; id?: string; value?: string };
+  const parentId = categoryValue.id ?? "";
+  const parentLabel = categoryValue.value ?? "";
+  const childId = categoryValue.child?.id ?? "";
+  const childLabel = categoryValue.child?.value ?? "";
+
+  return (
+    subtaskCategoryOptions.find(
+      (option) =>
+        (parentId && childId && option.primaryId === parentId && option.secondaryId === childId) ||
+        (parentLabel && childLabel && option.primary === parentLabel && option.secondary === childLabel)
+    ) ?? null
+  );
+}
+
+async function saveSubtaskEdits(
+  issue: JiraBoardIssue,
+  categorySelect: HTMLSelectElement,
+  estimateInput: HTMLInputElement,
+  assigneeInput: HTMLInputElement,
+  saveButton: HTMLButtonElement,
+  messageElement: HTMLSpanElement
+) {
+  const category = subtaskCategoryOptions.find((option) => getCategoryOptionValue(option) === categorySelect.value);
+  const estimate = estimateInput.value.trim();
+  const assignee = assigneeInput.value.trim();
+  const fields: JiraIssueFields = {};
+
+  if (category) {
+    fields.customfield_14102 = {
+      id: category.primaryId,
+      child: {
+        id: category.secondaryId
+      }
+    };
+  }
+
+  if (estimate) {
+    fields.timetracking = {
+      originalEstimate: estimate,
+      remainingEstimate: estimate
+    };
+  }
+
+  if (assignee) {
+    fields.assignee = {
+      name: assignee
+    };
+  }
+
+  if (!Object.keys(fields).length) {
+    showSubtaskEditMessage(messageElement, "没有可保存的字段。", "error");
+    return;
+  }
+
+  setButtonDisabled(saveButton, true);
+  showSubtaskEditMessage(messageElement, "保存中...", "success");
+
+  try {
+    await updateJiraIssueFields(currentJiraServerUrl, issue.key, fields);
+    showSubtaskEditMessage(messageElement, "已保存。", "success");
+  } catch (error) {
+    showSubtaskEditMessage(messageElement, getErrorMessage(error), "error");
+  } finally {
+    setButtonDisabled(saveButton, false);
+  }
+}
+
+function showSubtaskEditMessage(element: HTMLSpanElement, message: string, type: "error" | "success") {
+  element.textContent = message;
+  element.dataset.type = type;
 }
 
 function getIssueBrowseUrl(issueKey: string) {

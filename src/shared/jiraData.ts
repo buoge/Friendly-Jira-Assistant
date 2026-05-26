@@ -15,11 +15,12 @@ export type JiraBoard = {
 };
 
 export type JiraBoardIssue = {
-  fields: {
+  fields: JiraIssueFields & {
     issuetype?: {
       name?: string;
     };
     parent?: {
+      id?: string;
       fields?: {
         summary?: string;
       };
@@ -28,11 +29,32 @@ export type JiraBoardIssue = {
     status?: {
       name?: string;
     };
+    subtasks?: JiraBoardIssue[];
     summary?: string;
   };
   id: string;
   key: string;
   self?: string;
+};
+
+export type JiraIssueFields = Record<string, unknown> & {
+  assignee?: {
+    displayName?: string;
+    name?: string;
+  } | null;
+  issuetype?: {
+    id?: string;
+    name?: string;
+  };
+  project?: {
+    id?: string;
+    key?: string;
+  };
+  summary?: string;
+  timetracking?: {
+    originalEstimate?: string;
+    remainingEstimate?: string;
+  };
 };
 
 export type JiraSprint = {
@@ -48,6 +70,41 @@ export type JiraSprint = {
 export type JiraSprintIssueGroup = {
   issues: JiraBoardIssue[];
   sprint: JiraSprint;
+};
+
+export type JiraCreateFieldMetadata = {
+  allowedValues?: Array<Record<string, unknown>>;
+  name: string;
+  required?: boolean;
+  schema?: {
+    custom?: string;
+    customId?: number;
+    items?: string;
+    system?: string;
+    type?: string;
+  };
+};
+
+export type JiraSubtaskCreateMetadata = {
+  fields: Record<string, JiraCreateFieldMetadata>;
+  issueType: {
+    id?: string;
+    name: string;
+  };
+};
+
+export type JiraCreatedIssue = {
+  id: string;
+  key: string;
+  self: string;
+};
+
+export type JiraWebFormSubtaskFields = {
+  categoryChildId: string;
+  categoryParentId: string;
+  originalEstimate?: string;
+  parentIssueId: string;
+  summary: string;
 };
 
 type JiraBoardResponse =
@@ -120,6 +177,161 @@ export async function fetchBoardSprintIssueGroups(
   }
 
   return groups;
+}
+
+export async function fetchIssueForSubtaskCreation(jiraServerUrl: string, issueKey: string) {
+  return jiraFetch<JiraBoardIssue>(
+    jiraServerUrl,
+    `/rest/api/2/issue/${encodeURIComponent(issueKey)}?fields=*all`
+  );
+}
+
+export async function fetchSubtaskCreateMetadata(jiraServerUrl: string, projectKey: string) {
+  const metadata = await jiraFetch<{
+    projects?: Array<{
+      issuetypes?: Array<{
+        fields?: Record<string, JiraCreateFieldMetadata>;
+        id?: string;
+        name?: string;
+        subtask?: boolean;
+      }>;
+    }>;
+  }>(
+    jiraServerUrl,
+    `/rest/api/2/issue/createmeta?projectKeys=${encodeURIComponent(
+      projectKey
+    )}&expand=projects.issuetypes.fields`
+  );
+  const issueTypes = metadata.projects?.flatMap((project) => project.issuetypes ?? []) ?? [];
+  const subtaskIssueType =
+    issueTypes.find((issueType) => issueType.subtask) ??
+    issueTypes.find((issueType) => isSubtaskIssueTypeName(issueType.name ?? "")) ??
+    null;
+
+  if (!subtaskIssueType?.fields || !subtaskIssueType.name) {
+    throw new Error("未能从 Jira 读取子任务创建字段，请确认当前项目允许创建子任务。");
+  }
+
+  return {
+    fields: subtaskIssueType.fields,
+    issueType: {
+      id: subtaskIssueType.id,
+      name: subtaskIssueType.name
+    }
+  };
+}
+
+export async function createJiraSubtask(
+  jiraServerUrl: string,
+  fields: JiraIssueFields
+) {
+  return jiraFetch<JiraCreatedIssue>(jiraServerUrl, "/rest/api/2/issue", {
+    body: JSON.stringify({
+      fields
+    }),
+    method: "POST"
+  });
+}
+
+export async function createJiraSubtaskWithWebForm(jiraServerUrl: string, fields: JiraWebFormSubtaskFields) {
+  const formResponse = await fetch(
+    `${jiraServerUrl}/secure/CreateSubTaskIssue!default.jspa?parentIssueId=${encodeURIComponent(fields.parentIssueId)}`,
+    {
+      credentials: "include",
+      headers: {
+        Accept: "text/html"
+      },
+      referrerPolicy: "no-referrer"
+    }
+  );
+
+  if (!formResponse.ok) {
+    throw new Error(`Jira returned HTTP ${formResponse.status} while loading the subtask form.`);
+  }
+
+  const formHtml = await formResponse.text();
+  const formDocument = new DOMParser().parseFromString(formHtml, "text/html");
+  const formElement = formDocument.querySelector<HTMLFormElement>("#subtask-create-details");
+
+  if (!formElement) {
+    throw new Error("未能读取 Jira 原生创建子任务表单。");
+  }
+
+  const formData = new URLSearchParams();
+
+  formDocument.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+    "#subtask-create-details input[name], #subtask-create-details select[name], #subtask-create-details textarea[name]"
+  ).forEach((element) => {
+    if (element instanceof HTMLInputElement && ["file", "submit", "button"].includes(element.type)) {
+      return;
+    }
+
+    if (element instanceof HTMLSelectElement) {
+      const selectedOptions = [...element.selectedOptions];
+
+      if (!selectedOptions.length) {
+        formData.append(element.name, element.value);
+        return;
+      }
+
+      selectedOptions.forEach((option) => {
+        formData.append(element.name, option.value);
+      });
+      return;
+    }
+
+    formData.append(element.name, element.value);
+  });
+
+  formData.set("summary", fields.summary);
+  formData.set("parentIssueId", fields.parentIssueId);
+  formData.set("assignee", "-1");
+  formData.set("customfield_14102", fields.categoryParentId);
+  formData.set("customfield_14102:1", fields.categoryChildId);
+
+  if (fields.originalEstimate) {
+    formData.set("timetracking_originalestimate", fields.originalEstimate);
+    formData.set("timetracking_remainingestimate", fields.originalEstimate);
+  }
+
+  const action = formElement.getAttribute("action") ?? "CreateSubTaskIssueDetails.jspa";
+  const postUrl = new URL(action, formResponse.url || `${jiraServerUrl}/secure/`).href;
+  const createResponse = await fetch(postUrl, {
+    body: formData,
+    credentials: "include",
+    headers: {
+      Accept: "text/html",
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    method: "POST",
+    referrerPolicy: "no-referrer"
+  });
+  const responseHtml = await createResponse.text();
+
+  if (!createResponse.ok) {
+    throw new Error(`Jira returned HTTP ${createResponse.status} while submitting the subtask form.`);
+  }
+
+  if (responseHtml.includes("error") && responseHtml.includes("问题不存在")) {
+    throw new Error("Jira 原生表单创建失败：问题不存在。");
+  }
+
+  const createdKey = createResponse.url.match(/browse\/([A-Z0-9]+-\d+)/)?.[1] ?? fields.summary;
+
+  return {
+    id: "",
+    key: createdKey,
+    self: createResponse.url
+  };
+}
+
+export async function updateJiraIssueFields(jiraServerUrl: string, issueKey: string, fields: JiraIssueFields) {
+  await jiraFetch<Record<string, never>>(jiraServerUrl, `/rest/api/2/issue/${encodeURIComponent(issueKey)}`, {
+    body: JSON.stringify({
+      fields
+    }),
+    method: "PUT"
+  });
 }
 
 async function fetchVisiblePlanningSprints(jiraServerUrl: string, boardId: string, projectKey: string) {
@@ -220,7 +432,7 @@ async function fetchSprintIssues(jiraServerUrl: string, sprintId: number) {
       jiraServerUrl,
       `/rest/agile/1.0/sprint/${encodeURIComponent(
         String(sprintId)
-      )}/issue?maxResults=100&startAt=${startAt}&fields=summary,issuetype,status,parent`
+      )}/issue?maxResults=100&startAt=${startAt}&fields=summary,issuetype,status,parent,subtasks,assignee,timetracking,customfield_14102`
     );
 
     issues.push(...(issueResponse.issues ?? []));
@@ -228,7 +440,7 @@ async function fetchSprintIssues(jiraServerUrl: string, sprintId: number) {
     hasMore = startAt < issueResponse.total;
   }
 
-  return issues.filter(isStoryOrTaskIssue);
+  return issues.filter((issue) => isStoryOrTaskIssue(issue) || isSubtaskIssue(issue));
 }
 
 async function fetchGreenhopperProjectBoards(jiraServerUrl: string, projectKey: string) {
@@ -303,7 +515,7 @@ function isBoardForProject(board: JiraBoard, projectKey: string) {
 function isStoryOrTaskIssue(issue: JiraBoardIssue) {
   const issueType = issue.fields.issuetype?.name?.toLowerCase() ?? "";
 
-  if (issueType.includes("sub-task") || issueType.includes("subtask") || issueType.includes("子任务")) {
+  if (isSubtaskIssue(issue)) {
     return false;
   }
 
@@ -315,19 +527,51 @@ function isStoryOrTaskIssue(issue: JiraBoardIssue) {
   );
 }
 
-async function jiraFetch<T>(jiraServerUrl: string, apiPath: string) {
+function isSubtaskIssue(issue: JiraBoardIssue) {
+  const issueType = issue.fields.issuetype?.name?.toLowerCase() ?? "";
+
+  return isSubtaskIssueTypeName(issueType);
+}
+
+function isSubtaskIssueTypeName(issueTypeName: string) {
+  const issueType = issueTypeName.toLowerCase();
+
+  return issueType.includes("sub-task") || issueType.includes("subtask") || issueType.includes("子任务");
+}
+
+async function jiraFetch<T>(jiraServerUrl: string, apiPath: string, init: RequestInit = {}) {
   const response = await fetch(`${jiraServerUrl}${apiPath}`, {
+    ...init,
     credentials: "include",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...init.headers
     },
     referrerPolicy: "no-referrer"
   });
 
   if (!response.ok) {
-    throw new Error(`Jira returned HTTP ${response.status} while loading data.`);
+    let detail = "";
+
+    try {
+      const errorBody = await response.json() as { errorMessages?: string[]; errors?: Record<string, string> };
+      const fieldErrors = Object.values(errorBody.errors ?? {});
+      detail = [...(errorBody.errorMessages ?? []), ...fieldErrors].filter(Boolean).join(" ");
+    } catch {
+      detail = "";
+    }
+
+    throw new Error(
+      `Jira returned HTTP ${response.status} while requesting Jira.${detail ? ` ${detail}` : ""}`
+    );
   }
 
-  return (await response.json()) as T;
+  const responseText = await response.text();
+
+  if (!responseText) {
+    return undefined as T;
+  }
+
+  return JSON.parse(responseText) as T;
 }
