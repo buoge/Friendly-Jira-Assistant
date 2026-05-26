@@ -1,6 +1,7 @@
 # Friendly Jira Assistant
 
-Friendly Jira Assistant is a Manifest V3 browser extension scaffold for Jira pages.
+* Friendly Jira Assistant is a chrome extension for Jira pages.
+* Help us create subtasks faster and more efficiently.
 
 ## Screenshots
 ### jira server setting:
