@@ -2,6 +2,7 @@ import "./styles.css";
 import {
   createJiraSubtaskWithWebForm,
   fetchBoardSprintIssueGroups,
+  fetchIssueStoryContext,
   fetchJiraProjects,
   fetchProjectBoards,
   updateJiraIssueFields,
@@ -16,6 +17,10 @@ import {
   hasJiraHostPermission
 } from "../shared/jiraUser";
 import { validateJiraServerUrl } from "../shared/jiraUrl";
+import { getStoryPointsFromFields } from "../shared/jiraStoryPoints";
+import { resolveSubtaskCategory } from "../shared/subtaskTemplates";
+import { showTemplateApplyDialog } from "./templateApplyDialog";
+import { initTemplateViews, renderTemplateManager } from "./templateViews";
 
 type JiraProjectConfig = {
   key: string;
@@ -41,6 +46,7 @@ type SubtaskCategory = {
 
 type SubtaskDraft = {
   category: SubtaskCategory;
+  checkedByDefault?: boolean;
   originalEstimate?: string;
   summary: string;
 };
@@ -143,7 +149,8 @@ const fixedSubtaskDrafts: SubtaskDraft[] = [
     }
   },
   {
-    summary: "测试用例编写",
+    summary: "测试-用例编写",
+    checkedByDefault: false,
     category: {
       primary: "测试工作",
       primaryId: "41372",
@@ -152,7 +159,8 @@ const fixedSubtaskDrafts: SubtaskDraft[] = [
     }
   },
   {
-    summary: "测试用例执行",
+    summary: "测试-用例执行",
+    checkedByDefault: false,
     category: {
       primary: "测试工作",
       primaryId: "41372",
@@ -163,6 +171,8 @@ const fixedSubtaskDrafts: SubtaskDraft[] = [
 ];
 const jiraUrlForm = document.querySelector<HTMLFormElement>("#jira-url-form");
 const jiraUrlInput = document.querySelector<HTMLInputElement>("#jira-url");
+const saveJiraServerButton = document.querySelector<HTMLButtonElement>("#save-jira-server");
+const saveJiraProjectButton = document.querySelector<HTMLButtonElement>("#save-jira-project");
 const clearJiraUrlButton = document.querySelector<HTMLButtonElement>("#clear-jira-url");
 const jiraUrlMessage = document.querySelector<HTMLParagraphElement>("#jira-url-message");
 const connectionStatus = document.querySelector<HTMLSpanElement>("#connection-status");
@@ -180,12 +190,16 @@ const storyFilterSummary = document.querySelector<HTMLParagraphElement>("#story-
 const storyProjectSummary = document.querySelector<HTMLParagraphElement>("#story-project-summary");
 const storyIssuesCount = document.querySelector<HTMLParagraphElement>("#story-issues-count");
 const storyIssuesList = document.querySelector<HTMLDivElement>("#story-issues-list");
+const templateTabs = document.querySelector<HTMLElement>("#template-tabs");
+const templateTabPanels = document.querySelector<HTMLElement>("#template-tab-panels");
+const createTemplateButton = document.querySelector<HTMLButtonElement>("#create-template");
 let currentJiraServerUrl = "";
 let currentProjectConfig: JiraProjectConfig | null = null;
 let currentStoryBoardConfig: StoryBoardConfig | null = null;
 let jiraProjectsLoaded = false;
 let jiraProjectOptionItems: Array<{ value: string; label: string }> = [];
 let storyBoardOptionItems: Array<{ value: string; label: string }> = [];
+let pendingFocusIssueKey: string | null = null;
 
 async function loadSettings() {
   const {
@@ -257,6 +271,19 @@ function renderJiraUrl(jiraServerUrl: string) {
     setDatalistOptions(jiraProjectOptions, []);
     setDatalistOptions(storyBoardOptions, []);
     renderStoryProjectSummary();
+  }
+
+  updateProjectFieldAvailability();
+}
+
+function updateProjectFieldAvailability() {
+  const serverSaved = Boolean(currentJiraServerUrl);
+
+  setInputDisabled(jiraProjectFilter, !serverSaved);
+  setButtonDisabled(saveJiraProjectButton, !serverSaved);
+
+  if (jiraProjectFilter) {
+    jiraProjectFilter.placeholder = serverSaved ? "输入项目名称或 key" : "请先保存 Jira Server Url";
   }
 }
 
@@ -464,10 +491,14 @@ function showMissingUrlState(message: string) {
   }, 100);
 }
 
-jiraUrlForm?.addEventListener("submit", async (event) => {
+jiraUrlForm?.addEventListener("submit", (event) => {
   event.preventDefault();
+});
+
+saveJiraServerButton?.addEventListener("click", async () => {
   clearMessage(jiraUrlMessage);
 
+  const previousUrl = currentJiraServerUrl;
   const result = await saveJiraUrl(jiraUrlInput?.value ?? "");
 
   if (!result.ok) {
@@ -476,8 +507,30 @@ jiraUrlForm?.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (previousUrl && previousUrl !== result.value) {
+    await chrome.storage.sync.remove(projectStorageKey);
+    await chrome.storage.sync.remove(storyBoardStorageKey);
+    renderProjectConfig(null);
+    currentStoryBoardConfig = null;
+    setInputValue(storyBoardFilter, "");
+    storyBoardOptionItems = [];
+    setDatalistOptions(storyBoardOptions, []);
+    jiraProjectsLoaded = false;
+  }
+
   const profileLoaded = await loadJiraProfile(result.value, true);
-  await loadJiraProjects(result.value, false);
+  jiraProjectsLoaded = false;
+  await loadJiraProjects(result.value, profileLoaded);
+  updateProjectFieldAvailability();
+
+  if (profileLoaded) {
+    showMessage(jiraUrlMessage, "Jira Server Url saved.", "success");
+  }
+});
+
+saveJiraProjectButton?.addEventListener("click", async () => {
+  clearMessage(jiraUrlMessage);
+
   const projectSaveResult = await saveProjectConfig();
 
   if (!projectSaveResult.ok) {
@@ -486,17 +539,21 @@ jiraUrlForm?.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (profileLoaded) {
-    showMessage(
-      jiraUrlMessage,
-      projectSaveResult.projectConfig
-        ? `Jira settings saved. Current project: ${projectSaveResult.projectConfig.label}.`
-        : "Jira Server Url saved. Select a project here when you are ready.",
-      "success"
-    );
-  }
-
+  showMessage(
+    jiraUrlMessage,
+    projectSaveResult.projectConfig
+      ? `Project saved: ${projectSaveResult.projectConfig.label}.`
+      : "Project cleared.",
+    "success"
+  );
   activateView("story-subtasks");
+});
+
+jiraUrlInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveJiraServerButton?.click();
+  }
 });
 
 menuItems.forEach((menuItem) => {
@@ -523,11 +580,15 @@ function activateView(targetView: string) {
   if (targetView === "story-subtasks") {
     void loadStoryBoards();
   }
+
+  if (targetView === "task-templates") {
+    void renderTemplateManager();
+  }
 }
 
 clearJiraUrlButton?.addEventListener("click", async () => {
   const confirmed = window.confirm(
-    "Clear the saved Jira Server Url, project, and profile information? You will need to enter them again."
+    "确定清除所有配置吗？\n\n将删除已保存的 Jira Server Url、项目、看板和个人资料，清除后需要重新填写。"
   );
 
   if (!confirmed) {
@@ -637,11 +698,15 @@ async function loadProjectBoards(projectKey: string) {
 
     storyBoardOptionItems = options;
     setDatalistOptions(storyBoardOptions, options);
-    restoreStoryBoardForProject(projectKey);
+    const restoredSavedBoard = restoreStoryBoardForProject(projectKey);
     setStoryFilterMessage(
       options.length ? "迭代看板已从 Jira 加载，可输入字符模糊匹配。" : "该项目暂无迭代看板。",
       "success"
     );
+
+    if (restoredSavedBoard) {
+      await loadStoryIssues();
+    }
   } catch (error) {
     storyBoardOptionItems = [];
     setDatalistOptions(storyBoardOptions, []);
@@ -736,6 +801,7 @@ async function loadStoryIssues() {
     );
 
     renderStoryIssueGroups(sprintIssueGroups);
+    restorePendingStoryIssueFocus();
     setStoryFilterMessage(`当前过滤：${projectText}，${boardConfig.label}。`, "success");
     setStoryIssuesCount(
       `共加载 ${sprintIssueGroups.length} 个进行中/未开始迭代，${issueCount} 个故事/任务，${subtaskCount} 个子任务。`
@@ -789,7 +855,7 @@ async function saveStoryBoardConfig(boardConfig: { value: string; label: string 
 function restoreStoryBoardForProject(projectKey: string) {
   if (!currentStoryBoardConfig || currentStoryBoardConfig.projectKey !== projectKey) {
     setInputValue(storyBoardFilter, "");
-    return;
+    return false;
   }
 
   const boardExists = storyBoardOptionItems.some((option) => option.value === currentStoryBoardConfig?.value);
@@ -798,10 +864,11 @@ function restoreStoryBoardForProject(projectKey: string) {
     currentStoryBoardConfig = null;
     setInputValue(storyBoardFilter, "");
     void chrome.storage.sync.remove(storyBoardStorageKey);
-    return;
+    return false;
   }
 
   setInputValue(storyBoardFilter, currentStoryBoardConfig.label);
+  return true;
 }
 
 function renderStoryIssues(issues: JiraBoardIssue[]) {
@@ -826,6 +893,58 @@ function renderStoryIssueGroups(groups: JiraSprintIssueGroup[]) {
   }
 
   storyIssuesList.replaceChildren(...groups.map((group) => createSprintGroupElement(group)));
+}
+
+function restorePendingStoryIssueFocus() {
+  if (!pendingFocusIssueKey) {
+    return;
+  }
+
+  const issueKey = pendingFocusIssueKey;
+  pendingFocusIssueKey = null;
+
+  requestAnimationFrame(() => {
+    focusStoryIssueRow(issueKey);
+  });
+}
+
+function focusStoryIssueRow(issueKey: string) {
+  if (!storyIssuesList) {
+    return;
+  }
+
+  const issueElement = storyIssuesList.querySelector<HTMLElement>(`[data-issue-key="${issueKey}"]`);
+
+  if (!issueElement) {
+    return;
+  }
+
+  const sprintGroupElement = issueElement.closest(".sprint-group");
+  const sprintHeaderElement = sprintGroupElement?.querySelector<HTMLButtonElement>(".sprint-group__heading");
+  const sprintIssuesElement = sprintGroupElement?.querySelector<HTMLElement>(".sprint-group__issues");
+
+  if (sprintHeaderElement && sprintHeaderElement.getAttribute("aria-expanded") !== "true") {
+    sprintHeaderElement.setAttribute("aria-expanded", "true");
+
+    if (sprintIssuesElement) {
+      sprintIssuesElement.hidden = false;
+    }
+  }
+
+  const issueHeaderElement = issueElement.querySelector<HTMLButtonElement>(".issue-row__header");
+  const detailElement = issueElement.querySelector<HTMLElement>(".issue-row__details");
+
+  if (issueHeaderElement && issueHeaderElement.getAttribute("aria-expanded") !== "true") {
+    issueHeaderElement.setAttribute("aria-expanded", "true");
+
+    if (detailElement) {
+      detailElement.hidden = false;
+    }
+  }
+
+  const batchCreateElement = issueElement.querySelector<HTMLElement>(".batch-create");
+  const scrollTarget = batchCreateElement ?? issueElement;
+  scrollTarget.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function createSprintGroupElement(group: JiraSprintIssueGroup) {
@@ -958,6 +1077,7 @@ function isSubtaskIssue(issue: JiraBoardIssue) {
 function createIssueElement(issue: IssueWithSubtasks) {
   const issueElement = document.createElement("article");
   issueElement.className = "issue-row";
+  issueElement.dataset.issueKey = issue.key;
 
   const issueType = issue.fields.issuetype?.name ?? "Issue";
   const status = issue.fields.status?.name ?? "No status";
@@ -1047,14 +1167,23 @@ function createBatchCreatePanel(issue: IssueWithSubtasks) {
   const headingElement = document.createElement("div");
   headingElement.className = "batch-create__heading";
 
+  const headingMainElement = document.createElement("div");
+  headingMainElement.className = "batch-create__heading-main";
+
   const titleElement = document.createElement("h5");
   titleElement.textContent = "批量创建子任务";
+
+  const applyTemplateButton = document.createElement("button");
+  applyTemplateButton.type = "button";
+  applyTemplateButton.className = "batch-create__apply-template";
+  applyTemplateButton.textContent = "应用任务拆分模板";
 
   const messageElement = document.createElement("p");
   messageElement.className = "batch-create__message";
   messageElement.setAttribute("role", "status");
 
-  headingElement.append(titleElement, messageElement);
+  headingMainElement.append(titleElement, applyTemplateButton);
+  headingElement.append(headingMainElement, messageElement);
 
   const fixedListElement = document.createElement("div");
   fixedListElement.className = "batch-create__fixed";
@@ -1065,7 +1194,8 @@ function createBatchCreatePanel(issue: IssueWithSubtasks) {
 
     const checkboxElement = document.createElement("input");
     checkboxElement.type = "checkbox";
-    checkboxElement.checked = true;
+    checkboxElement.checked =
+      draft.checkedByDefault === false ? false : !isFixedSubtaskDraftCovered(issue, draft);
     checkboxElement.value = draft.summary;
 
     const textElement = document.createElement("span");
@@ -1117,7 +1247,97 @@ function createBatchCreatePanel(issue: IssueWithSubtasks) {
     void createMissingSubtasks(issue, fixedCheckboxes, customTextareaElement.value, createButtonElement, messageElement);
   });
 
+  applyTemplateButton.addEventListener("click", () => {
+    void (async () => {
+      const storyContext = currentJiraServerUrl
+        ? await fetchIssueStoryContext(currentJiraServerUrl, issue)
+        : {
+            storyKey: issue.key,
+            storyPoints:
+              getStoryPointsFromFields(issue.fields as Record<string, unknown>) ?? "—",
+            storySummary: issue.fields.summary?.trim() || "未命名用户故事"
+          };
+      const items = await showTemplateApplyDialog(storyContext);
+
+      if (!items?.length) {
+        return;
+      }
+
+      applyTemplateItemsToBatchCreate(issue, items, fixedCheckboxes, customTextareaElement);
+      refreshPreview();
+      showBatchCreateMessage(messageElement, `已从模板填入 ${items.length} 项任务，请确认后创建。`, "success");
+    })();
+  });
+
   return panelElement;
+}
+
+function findFixedSubtaskDraftIndex(summary: string) {
+  const normalizedSummary = normalizeSummary(summary);
+  const category = resolveSubtaskCategory(summary);
+
+  return fixedSubtaskDrafts.findIndex((draft) => {
+    if (normalizeSummary(draft.summary) === normalizedSummary) {
+      return true;
+    }
+
+    return (
+      category !== null &&
+      category.primaryId === draft.category.primaryId &&
+      category.secondaryId === draft.category.secondaryId
+    );
+  });
+}
+
+function applyTemplateItemsToBatchCreate(
+  issue: IssueWithSubtasks,
+  items: Array<{ estimateHours: number; summary: string }>,
+  fixedCheckboxes: HTMLInputElement[],
+  customTextareaElement: HTMLTextAreaElement
+) {
+  fixedCheckboxes.forEach((checkbox) => {
+    checkbox.checked = false;
+  });
+
+  const customLines: string[] = [];
+
+  items.forEach((item) => {
+    const draftIndex = findFixedSubtaskDraftIndex(item.summary);
+
+    if (draftIndex >= 0) {
+      const draft = fixedSubtaskDrafts[draftIndex];
+
+      if (!isFixedSubtaskDraftCovered(issue, draft)) {
+        fixedCheckboxes[draftIndex].checked = true;
+      }
+
+      return;
+    }
+
+    if (getCustomTaskCategory(item.summary)) {
+      customLines.push(`${item.summary}，${item.estimateHours}h`);
+    }
+  });
+
+  customTextareaElement.value = customLines.join("\n");
+}
+
+function isFixedSubtaskDraftCovered(issue: IssueWithSubtasks, draft: SubtaskDraft) {
+  const normalizedDraftSummary = normalizeSummary(draft.summary);
+
+  return issue.subtasks.some((subtask) => {
+    if (normalizeSummary(subtask.fields.summary ?? "") === normalizedDraftSummary) {
+      return true;
+    }
+
+    const existingCategory = getIssueSubtaskCategory(subtask);
+
+    return (
+      existingCategory !== null &&
+      existingCategory.primaryId === draft.category.primaryId &&
+      existingCategory.secondaryId === draft.category.secondaryId
+    );
+  });
 }
 
 function getBatchCreatePreview(issue: IssueWithSubtasks, fixedCheckboxes: HTMLInputElement[], customTaskText: string) {
@@ -1128,7 +1348,28 @@ function getBatchCreatePreview(issue: IssueWithSubtasks, fixedCheckboxes: HTMLIn
   const creatable: SubtaskDraft[] = [];
   const skipped: string[] = [];
 
-  [...selectedFixedDrafts, ...customDraftResult.drafts].forEach((draft) => {
+  selectedFixedDrafts.forEach((draft) => {
+    const normalizedSummary = normalizeSummary(draft.summary);
+
+    if (!normalizedSummary) {
+      return;
+    }
+
+    if (isFixedSubtaskDraftCovered(issue, draft)) {
+      skipped.push(`${draft.summary}（已存在）`);
+      return;
+    }
+
+    if (duplicateSummaries.has(normalizedSummary)) {
+      skipped.push(`${draft.summary}（重复输入）`);
+      return;
+    }
+
+    duplicateSummaries.add(normalizedSummary);
+    creatable.push(draft);
+  });
+
+  customDraftResult.drafts.forEach((draft) => {
     const normalizedSummary = normalizeSummary(draft.summary);
 
     if (!normalizedSummary) {
@@ -1300,6 +1541,7 @@ async function createMissingSubtasks(
       `已创建 ${createdKeys.length} 个子任务${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
       "success"
     );
+    pendingFocusIssueKey = issue.key;
     await loadStoryIssues();
     setStoryFilterMessage(
       `已为 ${issue.key} 创建 ${createdKeys.length} 个子任务${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
@@ -1571,6 +1813,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (jiraServerUrl) {
       void loadJiraProfile(jiraServerUrl, false);
       void loadJiraProjects(jiraServerUrl, false);
+    } else {
+      updateProjectFieldAvailability();
     }
   }
 
@@ -1591,3 +1835,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 loadSettings();
+
+initTemplateViews({
+  createTemplateButton,
+  templateTabPanels,
+  templateTabs
+});

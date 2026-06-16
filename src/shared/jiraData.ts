@@ -1,3 +1,5 @@
+import { getStoryPointsFieldCandidates, getStoryPointsFromFields } from "./jiraStoryPoints";
+
 export type JiraProject = {
   id: string;
   key: string;
@@ -177,6 +179,71 @@ export async function fetchBoardSprintIssueGroups(
   }
 
   return groups;
+}
+
+export type JiraStoryContext = {
+  storyKey: string;
+  storyPoints: string;
+  storySummary: string;
+};
+
+let cachedStoryPointsFieldId: string | null | undefined;
+
+export async function resolveStoryPointsFieldId(jiraServerUrl: string) {
+  if (cachedStoryPointsFieldId !== undefined) {
+    return cachedStoryPointsFieldId;
+  }
+
+  try {
+    const fields = await jiraFetch<Array<{ id: string; name: string }>>(jiraServerUrl, `/rest/api/2/field`);
+    const matchedField = fields.find((field) => {
+      const normalizedName = field.name.trim().toLowerCase();
+
+      return (
+        normalizedName === "story points" ||
+        normalizedName === "story point" ||
+        normalizedName === "故事点" ||
+        normalizedName === "故事点数" ||
+        normalizedName.includes("故事点")
+      );
+    });
+
+    cachedStoryPointsFieldId = matchedField?.id ?? null;
+  } catch {
+    cachedStoryPointsFieldId = null;
+  }
+
+  return cachedStoryPointsFieldId;
+}
+
+export async function fetchIssueStoryContext(jiraServerUrl: string, issue: JiraBoardIssue) {
+  const storySummary = issue.fields.summary?.trim() || "未命名用户故事";
+  const storyPointsFieldId = await resolveStoryPointsFieldId(jiraServerUrl);
+  let storyPoints = getStoryPointsFromFields(issue.fields as Record<string, unknown>, storyPointsFieldId);
+
+  if (storyPoints === null) {
+    const fieldsToFetch = ["summary", ...getStoryPointsFieldCandidates()];
+
+    if (storyPointsFieldId) {
+      fieldsToFetch.push(storyPointsFieldId);
+    }
+
+    try {
+      const enrichedIssue = await jiraFetch<JiraBoardIssue>(
+        jiraServerUrl,
+        `/rest/api/2/issue/${encodeURIComponent(issue.key)}?fields=${fieldsToFetch.join(",")}`
+      );
+      storyPoints = getStoryPointsFromFields(enrichedIssue.fields as Record<string, unknown>, storyPointsFieldId);
+    } catch {
+      storyPoints = null;
+    }
+  }
+
+  return {
+    storyKey: issue.key,
+    storyPoints: storyPoints ?? "—",
+    storySummary
+  };
 }
 
 export async function fetchIssueForSubtaskCreation(jiraServerUrl: string, issueKey: string) {
@@ -421,6 +488,8 @@ async function fetchSprintIssues(jiraServerUrl: string, sprintId: number) {
   const issues: JiraBoardIssue[] = [];
   let startAt = 0;
   let hasMore = true;
+  const storyPointsFieldId = await resolveStoryPointsFieldId(jiraServerUrl);
+  const issueFields = buildStoryIssueFields(storyPointsFieldId);
 
   while (hasMore && startAt < 5000) {
     const issueResponse = await jiraFetch<{
@@ -432,7 +501,7 @@ async function fetchSprintIssues(jiraServerUrl: string, sprintId: number) {
       jiraServerUrl,
       `/rest/agile/1.0/sprint/${encodeURIComponent(
         String(sprintId)
-      )}/issue?maxResults=100&startAt=${startAt}&fields=summary,issuetype,status,parent,subtasks,assignee,timetracking,customfield_14102`
+      )}/issue?maxResults=100&startAt=${startAt}&fields=${issueFields}`
     );
 
     issues.push(...(issueResponse.issues ?? []));
@@ -537,6 +606,26 @@ function isSubtaskIssueTypeName(issueTypeName: string) {
   const issueType = issueTypeName.toLowerCase();
 
   return issueType.includes("sub-task") || issueType.includes("subtask") || issueType.includes("子任务");
+}
+
+function buildStoryIssueFields(storyPointsFieldId: string | null) {
+  const fields = new Set([
+    "summary",
+    "issuetype",
+    "status",
+    "parent",
+    "subtasks",
+    "assignee",
+    "timetracking",
+    "customfield_14102",
+    ...getStoryPointsFieldCandidates()
+  ]);
+
+  if (storyPointsFieldId) {
+    fields.add(storyPointsFieldId);
+  }
+
+  return [...fields].join(",");
 }
 
 async function jiraFetch<T>(jiraServerUrl: string, apiPath: string, init: RequestInit = {}) {

@@ -32,6 +32,10 @@
               <span class="menu-item__icon" aria-hidden="true">T</span>
               <span>子任务拆分</span>
             </button>
+            <button class="menu-item" type="button" data-view-target="task-templates">
+              <span class="menu-item__icon" aria-hidden="true">M</span>
+              <span>任务拆分模板</span>
+            </button>
           </section>
 
           <section>
@@ -67,23 +71,29 @@
               <p id="jira-url-help" class="field-help">
                 Add the base URL of your Jira site. The assistant will use it as the starting point for Jira workflows.
               </p>
+              <div class="form-actions form-actions--inline">
+                <button id="save-jira-server" type="button">Save</button>
+              </div>
               <label class="field" for="jira-project-filter">
                 <span>项目</span>
                 <input
                   id="jira-project-filter"
                   name="jira-project-filter"
                   list="jira-project-options"
-                  placeholder="输入项目名称或 key"
+                  placeholder="请先保存 Jira Server Url"
                   autocomplete="off"
+                  disabled
                 />
                 <datalist id="jira-project-options"></datalist>
               </label>
               <p class="field-help">选择一次默认项目，后续功能会自动使用；需要切换项目时回到这里修改后保存。</p>
               <div class="form-actions">
-                <button id="save-jira-url" type="submit">Save Settings</button>
-                <button id="clear-jira-url" class="button-secondary" type="button">Clear</button>
+                <button id="save-jira-project" type="button" disabled>Save Project</button>
               </div>
-              <p id="jira-url-message" class="form-message" role="status"></p>
+              <div class="settings-panel__statusbar">
+                <p id="jira-url-message" class="form-message" role="status"></p>
+                <button id="clear-jira-url" class="button-danger" type="button">Clear all</button>
+              </div>
             </form>
           </section>
 
@@ -97,7 +107,7 @@
 
             <div class="filter-panel">
               <p id="story-project-summary" class="filter-summary">当前项目：未配置</p>
-              <div class="filter-grid">
+              <div class="filter-board-row">
                 <label class="field" for="story-board-filter">
                   <span>迭代看板</span>
                   <input
@@ -109,10 +119,9 @@
                   />
                   <datalist id="story-board-options"></datalist>
                 </label>
-              </div>
-
-              <div class="form-actions">
-                <button id="apply-story-filters" type="button">应用过滤</button>
+                <div class="filter-board-row__action">
+                  <button id="apply-story-filters" type="button">应用过滤</button>
+                </div>
               </div>
               <p id="story-filter-summary" class="form-message" role="status">当前显示配置项目和全部迭代看板。</p>
             </div>
@@ -127,9 +136,40 @@
               <div id="story-issues-list" class="issues-list"></div>
             </section>
           </section>
+
+          <section class="view" data-view="task-templates">
+            <div class="content__heading content__heading--split">
+              <div>
+                <p>Tools</p>
+                <h2>任务拆分模板</h2>
+              </div>
+              <button id="create-template" class="button-primary" type="button">新增拆分模板</button>
+            </div>
+
+            <div class="template-panel">
+              <p class="template-panel__intro">
+                根据任务类型选择模板，查看标准子任务拆分样例；可拖动标签调整顺序，后续可在详情页编辑并用于快速拆分。
+              </p>
+              <div id="template-tabs" class="template-tabs" role="tablist" aria-label="任务拆分模板"></div>
+              <div id="template-tab-panels" class="template-tab-panels" aria-live="polite"></div>
+            </div>
+          </section>
         </section>
       </div>
     </main>
+
+    <div id="app-dialog-root" class="app-dialog-root" hidden aria-hidden="true">
+      <div class="app-dialog__backdrop"></div>
+      <div class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+        <h3 id="app-dialog-title" class="app-dialog__title"></h3>
+        <p id="app-dialog-message" class="app-dialog__message"></p>
+        <div id="app-dialog-fields" class="app-dialog__fields" hidden></div>
+        <div class="app-dialog__actions">
+          <button id="app-dialog-cancel" class="button-secondary" type="button">取消</button>
+          <button id="app-dialog-confirm" class="button-primary" type="button">确定</button>
+        </div>
+      </div>
+    </div>
 
     <script type="module" src="./main.ts"></script>
   </body>
