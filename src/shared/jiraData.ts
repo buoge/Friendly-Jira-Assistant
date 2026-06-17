@@ -1,4 +1,8 @@
-import { getStoryPointsFieldCandidates, getStoryPointsFromFields } from "./jiraStoryPoints";
+import {
+  getStoryPointsFromFields,
+  resolveStoryPointsFieldFromDefinitions,
+  type JiraFieldDefinition
+} from "./jiraStoryPoints";
 
 export type JiraProject = {
   id: string;
@@ -195,25 +199,17 @@ export async function resolveStoryPointsFieldId(jiraServerUrl: string) {
   }
 
   try {
-    const fields = await jiraFetch<Array<{ id: string; name: string }>>(jiraServerUrl, `/rest/api/2/field`);
-    const matchedField = fields.find((field) => {
-      const normalizedName = field.name.trim().toLowerCase();
-
-      return (
-        normalizedName === "story points" ||
-        normalizedName === "story point" ||
-        normalizedName === "故事点" ||
-        normalizedName === "故事点数" ||
-        normalizedName.includes("故事点")
-      );
-    });
-
-    cachedStoryPointsFieldId = matchedField?.id ?? null;
+    const fields = await jiraFetch<JiraFieldDefinition[]>(jiraServerUrl, `/rest/api/2/field`);
+    cachedStoryPointsFieldId = resolveStoryPointsFieldFromDefinitions(fields);
   } catch {
     cachedStoryPointsFieldId = null;
   }
 
   return cachedStoryPointsFieldId;
+}
+
+export function getCachedStoryPointsFieldId() {
+  return cachedStoryPointsFieldId ?? null;
 }
 
 export async function fetchIssueStoryContext(jiraServerUrl: string, issue: JiraBoardIssue) {
@@ -222,7 +218,7 @@ export async function fetchIssueStoryContext(jiraServerUrl: string, issue: JiraB
   let storyPoints = getStoryPointsFromFields(issue.fields as Record<string, unknown>, storyPointsFieldId);
 
   if (storyPoints === null) {
-    const fieldsToFetch = ["summary", ...getStoryPointsFieldCandidates()];
+    const fieldsToFetch = ["summary"];
 
     if (storyPointsFieldId) {
       fieldsToFetch.push(storyPointsFieldId);
@@ -617,8 +613,7 @@ function buildStoryIssueFields(storyPointsFieldId: string | null) {
     "subtasks",
     "assignee",
     "timetracking",
-    "customfield_14102",
-    ...getStoryPointsFieldCandidates()
+    "customfield_14102"
   ]);
 
   if (storyPointsFieldId) {

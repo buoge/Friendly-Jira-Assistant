@@ -4,6 +4,7 @@ import {
   fetchBoardSprintIssueGroups,
   fetchIssueStoryContext,
   fetchJiraProjects,
+  getCachedStoryPointsFieldId,
   fetchProjectBoards,
   updateJiraIssueFields,
   type JiraBoardIssue,
@@ -1104,15 +1105,35 @@ function createIssueElement(issue: IssueWithSubtasks) {
   chevronElement.textContent = "›";
   chevronElement.setAttribute("aria-hidden", "true");
 
-  const keyElement = document.createElement("span");
+  const keyElement = document.createElement("a");
+  keyElement.href = getIssueBrowseUrl(issue.key);
+  keyElement.target = "_blank";
+  keyElement.rel = "noreferrer";
   keyElement.className = "issue-row__key";
   keyElement.textContent = issue.key;
+  keyElement.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+
+  const storyPoints = getStoryPointsFromFields(
+    issue.fields as Record<string, unknown>,
+    getCachedStoryPointsFieldId()
+  );
 
   const statusElement = document.createElement("span");
   statusElement.className = "issue-row__status";
   statusElement.textContent = status;
 
-  metaElement.append(typeElement, keyElement, statusElement);
+  metaElement.append(typeElement, keyElement);
+
+  if (storyPoints) {
+    const storyPointsElement = document.createElement("span");
+    storyPointsElement.className = "issue-row__story-points";
+    storyPointsElement.textContent = `点数：【${storyPoints}】`;
+    metaElement.append(storyPointsElement);
+  }
+
+  metaElement.append(statusElement);
 
   const summaryElement = document.createElement("p");
   summaryElement.textContent = summary;

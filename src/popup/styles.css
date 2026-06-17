@@ -598,6 +598,13 @@ textarea:disabled {
   text-decoration: underline;
 }
 
+.issue-row__story-points {
+  flex-shrink: 0;
+  color: #172b4d;
+  font-size: 14px;
+  font-weight: 800;
+}
+
 .issue-row__type,
 .issue-row__status {
   flex: 0 0 auto;
