@@ -499,6 +499,10 @@ textarea:disabled {
 }
 
 .sprint-group__title-text {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -506,6 +510,15 @@ textarea:disabled {
   margin: 0;
   color: #172b4d;
   font-size: 16px;
+  font-weight: 800;
+}
+
+.sprint-group__stats {
+  flex-shrink: 0;
+  color: #172b4d;
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .sprint-group--active .sprint-group__title-text h4 {
@@ -631,6 +644,41 @@ textarea:disabled {
   background: #abf5d1;
 }
 
+.issue-row__preview-toggle {
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 0 10px;
+  color: #42526e;
+  background: #ffffff;
+  border: 1px solid #c1c7d0;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.issue-row__preview-toggle:hover {
+  background: #f4f5f7;
+}
+
+.issue-row__preview-toggle[aria-pressed="true"] {
+  color: #0052cc;
+  background: #deebff;
+  border-color: #4c9aff;
+}
+
+.issue-row--preview .batch-create {
+  display: none;
+}
+
+.issue-row--preview .subtask-row__editor {
+  display: none;
+}
+
+.issue-row--preview .subtask-row__preview {
+  display: grid;
+}
+
 .issue-row p {
   margin: 0;
   padding: 0 16px 12px 48px;
@@ -720,6 +768,44 @@ textarea:disabled {
   align-items: end;
   gap: 8px;
   min-width: 0;
+}
+
+.subtask-row__preview {
+  display: none;
+  grid-template-columns:
+    minmax(180px, 1.3fr)
+    minmax(200px, 1fr)
+    minmax(90px, 0.42fr)
+    minmax(120px, 0.55fr);
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.subtask-row__preview-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.subtask-row__preview-label {
+  color: #6b778c;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.subtask-row__preview-value {
+  min-height: 32px;
+  padding: 6px 8px 0;
+  color: #172b4d;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.subtask-row__preview-value--empty {
+  color: #bf2600;
+  font-weight: 700;
 }
 
 .subtask-row__field {

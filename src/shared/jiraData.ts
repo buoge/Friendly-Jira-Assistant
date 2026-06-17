@@ -61,6 +61,10 @@ export type JiraIssueFields = Record<string, unknown> & {
     originalEstimate?: string;
     remainingEstimate?: string;
   };
+  aggregatetimeestimate?: number | null;
+  aggregatetimeoriginalestimate?: number | null;
+  timeestimate?: number | null;
+  timeoriginalestimate?: number | null;
 };
 
 export type JiraSprint = {
@@ -588,7 +592,10 @@ function isStoryOrTaskIssue(issue: JiraBoardIssue) {
     issueType.includes("story") ||
     issueType === "task" ||
     issueType.includes("故事") ||
-    issueType === "任务"
+    issueType === "任务" ||
+    issueType.includes("bug") ||
+    issueType.includes("缺陷") ||
+    issueType.includes("故障")
   );
 }
 
@@ -613,6 +620,10 @@ function buildStoryIssueFields(storyPointsFieldId: string | null) {
     "subtasks",
     "assignee",
     "timetracking",
+    "aggregatetimeestimate",
+    "aggregatetimeoriginalestimate",
+    "timeestimate",
+    "timeoriginalestimate",
     "customfield_14102"
   ]);
 

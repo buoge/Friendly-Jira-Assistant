@@ -19,7 +19,14 @@ import {
 } from "../shared/jiraUser";
 import { validateJiraServerUrl } from "../shared/jiraUrl";
 import { getStoryPointsFromFields } from "../shared/jiraStoryPoints";
-import { formatHoursAsWorkDays, parseEstimateToHours, resolveSubtaskCategory } from "../shared/subtaskTemplates";
+import {
+  formatHoursAsWorkDays,
+  formatTotalWorkHoursDisplay,
+  getIssueTimeTrackingHoursFromFields,
+  parseEstimateToHours,
+  parseJiraTimeEstimateToHours,
+  resolveSubtaskCategory
+} from "../shared/subtaskTemplates";
 import { showTemplateApplyDialog } from "./templateApplyDialog";
 import { initTemplateViews, renderTemplateManager } from "./templateViews";
 
@@ -948,6 +955,92 @@ function focusStoryIssueRow(issueKey: string) {
   scrollTarget.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+function getIssueSubtasksTotalHours(issue: IssueWithSubtasks) {
+  return issue.subtasks.reduce((total, subtask) => {
+    return total + getIssueTimeTrackingHoursFromFields(subtask.fields as Record<string, unknown>);
+  }, 0);
+}
+
+function getIssueDisplayWorkHours(issue: IssueWithSubtasks) {
+  const rolledUpHours = getIssueTimeTrackingHoursFromFields(issue.fields as Record<string, unknown>);
+
+  if (rolledUpHours > 0) {
+    return rolledUpHours;
+  }
+
+  return getIssueSubtasksTotalHours(issue);
+}
+
+function formatTotalStoryPoints(total: number) {
+  if (total <= 0) {
+    return "0";
+  }
+
+  const rounded = Math.round(total * 10) / 10;
+
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function isUserStoryIssue(issue: JiraBoardIssue) {
+  const issueType = issue.fields.issuetype?.name?.toLowerCase() ?? "";
+
+  return issueType.includes("story") || issueType.includes("故事");
+}
+
+function isTaskIssue(issue: JiraBoardIssue) {
+  const issueType = issue.fields.issuetype?.name?.toLowerCase() ?? "";
+
+  return issueType === "task" || issueType === "任务";
+}
+
+function isBugIssue(issue: JiraBoardIssue) {
+  const issueType = issue.fields.issuetype?.name?.toLowerCase() ?? "";
+
+  return issueType.includes("bug") || issueType.includes("缺陷") || issueType.includes("故障");
+}
+
+function getSprintIssueTypeCounts(issues: IssueWithSubtasks[]) {
+  let storyCount = 0;
+  let taskCount = 0;
+  let bugCount = 0;
+
+  for (const issue of issues) {
+    if (isUserStoryIssue(issue)) {
+      storyCount += 1;
+      continue;
+    }
+
+    if (isTaskIssue(issue)) {
+      taskCount += 1;
+      continue;
+    }
+
+    if (isBugIssue(issue)) {
+      bugCount += 1;
+    }
+  }
+
+  return { bugCount, storyCount, taskCount };
+}
+
+function getSprintIssueStats(issues: IssueWithSubtasks[]) {
+  const storyPointsFieldId = getCachedStoryPointsFieldId();
+  let totalPoints = 0;
+  let totalHours = 0;
+
+  for (const issue of issues) {
+    const storyPoints = getStoryPointsFromFields(issue.fields as Record<string, unknown>, storyPointsFieldId);
+
+    if (storyPoints) {
+      totalPoints += Number(storyPoints) || 0;
+    }
+
+    totalHours += getIssueDisplayWorkHours(issue);
+  }
+
+  return { totalHours, totalPoints };
+}
+
 function createSprintGroupElement(group: JiraSprintIssueGroup) {
   const groupElement = document.createElement("section");
   groupElement.className = "sprint-group";
@@ -971,13 +1064,19 @@ function createSprintGroupElement(group: JiraSprintIssueGroup) {
   const nameElement = document.createElement("h4");
   nameElement.textContent = group.sprint.name;
 
-  titleTextElement.append(nameElement);
+  const issueTree = getIssuesWithSubtasks(group.issues);
+  const { totalHours, totalPoints } = getSprintIssueStats(issueTree);
+  const { bugCount, storyCount, taskCount } = getSprintIssueTypeCounts(issueTree);
+  const subtaskCount = issueTree.reduce((total, issue) => total + issue.subtasks.length, 0);
+
+  const statsElement = document.createElement("span");
+  statsElement.className = "sprint-group__stats";
+  statsElement.textContent = `总点数：【${formatTotalStoryPoints(totalPoints)}】  总工时：${formatTotalWorkHoursDisplay(totalHours)}  故事：【${storyCount}个】  任务：【${taskCount}个】  bug：【${bugCount}个】`;
+
+  titleTextElement.append(nameElement, statsElement);
 
   const metaElement = document.createElement("span");
   metaElement.className = "sprint-group__meta";
-  const issueTree = getIssuesWithSubtasks(group.issues);
-  const subtaskCount = issueTree.reduce((total, issue) => total + issue.subtasks.length, 0);
-
   metaElement.textContent = `${getSprintStateLabel(group.sprint.state)} · ${issueTree.length} 个故事/任务 · ${subtaskCount} 个子任务`;
 
   titleElement.append(chevronElement, titleTextElement);
@@ -1036,11 +1135,7 @@ function getIssuesWithSubtasks(issues: JiraBoardIssue[]): IssueWithSubtasks[] {
   });
 
   return topLevelIssues.map((issue) => {
-    const subtasks = [
-      ...(subtasksByParentKey.get(issue.key) ?? []),
-      ...(subtasksByParentId.get(issue.id) ?? []),
-      ...(issue.fields.subtasks ?? [])
-    ];
+    const subtasks = [...(subtasksByParentKey.get(issue.key) ?? []), ...(subtasksByParentId.get(issue.id) ?? [])];
     const seenSubtaskIds = new Set<string>();
 
     return {
@@ -1133,11 +1228,8 @@ function createIssueElement(issue: IssueWithSubtasks) {
     metaElement.append(storyPointsElement);
   }
 
-  if (issue.subtasks.length > 0) {
-    const totalHours = issue.subtasks.reduce((total, subtask) => {
-      const estimate = subtask.fields.timetracking?.originalEstimate ?? "";
-      return total + (parseEstimateToHours(estimate) ?? 0);
-    }, 0);
+  if (issue.subtasks.length > 0 || getIssueTimeTrackingHoursFromFields(issue.fields as Record<string, unknown>) > 0) {
+    const totalHours = getIssueDisplayWorkHours(issue);
     const workDaysElement = document.createElement("span");
     workDaysElement.className = "issue-row__work-days";
     workDaysElement.textContent = `工时：【${formatHoursAsWorkDays(totalHours)}d】`;
@@ -1145,6 +1237,19 @@ function createIssueElement(issue: IssueWithSubtasks) {
   }
 
   metaElement.append(statusElement);
+
+  const previewModeButton = document.createElement("button");
+  previewModeButton.type = "button";
+  previewModeButton.className = "issue-row__preview-toggle";
+  previewModeButton.textContent = "预览模式";
+  previewModeButton.setAttribute("aria-pressed", "false");
+  previewModeButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const isPreview = !issueElement.classList.contains("issue-row--preview");
+    setIssuePreviewMode(issueElement, previewModeButton, isPreview);
+  });
+  metaElement.append(previewModeButton);
+  setIssuePreviewMode(issueElement, previewModeButton, true);
 
   const summaryElement = document.createElement("p");
   summaryElement.textContent = summary;
@@ -1599,6 +1704,37 @@ function updateSubtaskEstimateInvalidState(estimateInput: HTMLInputElement) {
   estimateInput.classList.toggle("subtask-row__estimate--empty", !estimateInput.value.trim());
 }
 
+function setIssuePreviewMode(
+  issueElement: HTMLElement,
+  previewModeButton: HTMLButtonElement,
+  enabled: boolean
+) {
+  issueElement.classList.toggle("issue-row--preview", enabled);
+  previewModeButton.setAttribute("aria-pressed", String(enabled));
+  previewModeButton.textContent = enabled ? "编辑模式" : "预览模式";
+}
+
+function createSubtaskPreviewField(label: string, value: string, options?: { empty?: boolean }) {
+  const fieldElement = document.createElement("div");
+  fieldElement.className = "subtask-row__preview-field";
+
+  const labelElement = document.createElement("span");
+  labelElement.className = "subtask-row__preview-label";
+  labelElement.textContent = label;
+
+  const valueElement = document.createElement("span");
+  valueElement.className = "subtask-row__preview-value";
+  valueElement.textContent = value || "—";
+
+  if (options?.empty) {
+    valueElement.classList.add("subtask-row__preview-value--empty");
+  }
+
+  fieldElement.append(labelElement, valueElement);
+
+  return fieldElement;
+}
+
 function createSubtaskElement(issue: JiraBoardIssue) {
   const issueElement = document.createElement("article");
   issueElement.className = "subtask-row";
@@ -1671,6 +1807,15 @@ function createSubtaskElement(issue: JiraBoardIssue) {
 
   editorElement.append(summaryField, categoryField, estimateField, assigneeField, saveButton, messageElement);
 
+  const previewElement = document.createElement("div");
+  previewElement.className = "subtask-row__preview";
+  previewElement.append(
+    createSubtaskPreviewField("任务名称", summary),
+    createSubtaskPreviewField("任务分类", category ? `${category.primary} / ${category.secondary}` : "未设置"),
+    createSubtaskPreviewField("初始预估", originalEstimate || "—", { empty: !originalEstimate.trim() }),
+    createSubtaskPreviewField("经办人", assigneeLabel || assigneeName || "—")
+  );
+
   const metaElement = document.createElement("div");
   metaElement.className = "subtask-row__meta";
 
@@ -1690,7 +1835,7 @@ function createSubtaskElement(issue: JiraBoardIssue) {
   statusElement.textContent = status;
 
   metaElement.append(typeElement, keyElement, statusElement);
-  mainElement.append(metaElement, editorElement);
+  mainElement.append(metaElement, previewElement, editorElement);
   issueElement.append(mainElement);
 
   saveButton.addEventListener("click", () => {

@@ -162,18 +162,165 @@ export function resolveSubtaskCategory(summary: string): SubtaskCategory | null 
 }
 
 const HOURS_PER_WORK_DAY = 8;
+const DAYS_PER_WORK_WEEK = 5;
 
-export { HOURS_PER_WORK_DAY };
+export { DAYS_PER_WORK_WEEK, HOURS_PER_WORK_DAY };
+
+function roundWorkDays(days: number) {
+  return Math.round(days * 10) / 10;
+}
+
+function formatWorkDayLabel(days: number) {
+  const rounded = roundWorkDays(days);
+
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
 
 export function formatHoursAsWorkDays(totalHours: number) {
   if (totalHours <= 0) {
     return "0";
   }
 
-  const days = totalHours / HOURS_PER_WORK_DAY;
-  const rounded = Math.round(days * 10) / 10;
+  return formatWorkDayLabel(totalHours / HOURS_PER_WORK_DAY);
+}
 
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+export function formatHoursAsJiraTimeEstimate(totalHours: number) {
+  if (totalHours <= 0) {
+    return "0h";
+  }
+
+  let remainingMinutes = Math.round(totalHours * 60);
+  const minutesPerWeek = DAYS_PER_WORK_WEEK * HOURS_PER_WORK_DAY * 60;
+  const minutesPerDay = HOURS_PER_WORK_DAY * 60;
+
+  const weeks = Math.floor(remainingMinutes / minutesPerWeek);
+  remainingMinutes %= minutesPerWeek;
+
+  const days = Math.floor(remainingMinutes / minutesPerDay);
+  remainingMinutes %= minutesPerDay;
+
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+
+  const parts: string[] = [];
+
+  if (weeks > 0) {
+    parts.push(`${weeks}w`);
+  }
+
+  if (days > 0) {
+    parts.push(`${days}d`);
+  }
+
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+
+  if (minutes > 0) {
+    parts.push(`${minutes}m`);
+  }
+
+  return parts.length ? parts.join(" ") : "0h";
+}
+
+export function formatTotalWorkHoursDisplay(totalHours: number) {
+  return `【${formatHoursAsJiraTimeEstimate(totalHours)}】`;
+}
+
+function convertEstimateAmountToHours(amount: number, unit: string) {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return 0;
+  }
+
+  switch (unit) {
+    case "w":
+      return amount * DAYS_PER_WORK_WEEK * HOURS_PER_WORK_DAY;
+    case "d":
+      return amount * HOURS_PER_WORK_DAY;
+    case "h":
+      return amount;
+    case "m":
+      return amount / 60;
+    default:
+      return 0;
+  }
+}
+
+function readSecondsFieldAsHours(fields: Record<string, unknown>, key: string) {
+  const value = fields[key];
+
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value / 3600;
+  }
+
+  return undefined;
+}
+
+export function getIssueTimeTrackingHoursFromFields(fields: Record<string, unknown>) {
+  const tracking = fields.timetracking;
+
+  if (tracking && typeof tracking === "object") {
+    const record = tracking as { originalEstimate?: string; remainingEstimate?: string };
+
+    if (record.remainingEstimate !== undefined && record.remainingEstimate !== "") {
+      return parseJiraTimeEstimateToHours(record.remainingEstimate) ?? 0;
+    }
+  }
+
+  const aggregateRemaining = readSecondsFieldAsHours(fields, "aggregatetimeestimate");
+
+  if (aggregateRemaining !== undefined) {
+    return aggregateRemaining;
+  }
+
+  const remaining = readSecondsFieldAsHours(fields, "timeestimate");
+
+  if (remaining !== undefined) {
+    return remaining;
+  }
+
+  if (tracking && typeof tracking === "object") {
+    const record = tracking as { originalEstimate?: string };
+
+    if (record.originalEstimate !== undefined && record.originalEstimate !== "") {
+      return parseJiraTimeEstimateToHours(record.originalEstimate) ?? 0;
+    }
+  }
+
+  const aggregateOriginal = readSecondsFieldAsHours(fields, "aggregatetimeoriginalestimate");
+
+  if (aggregateOriginal !== undefined) {
+    return aggregateOriginal;
+  }
+
+  const original = readSecondsFieldAsHours(fields, "timeoriginalestimate");
+
+  if (original !== undefined) {
+    return original;
+  }
+
+  return 0;
+}
+
+export function parseJiraTimeEstimateToHours(value: string) {
+  const trimmed = value.trim().toLowerCase();
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parts = [...trimmed.matchAll(/(\d+(?:\.\d+)?)\s*([wdhm])/g)];
+
+  if (parts.length) {
+    const totalHours = parts.reduce(
+      (total, [, amount, unit]) => total + convertEstimateAmountToHours(Number(amount), unit),
+      0
+    );
+
+    return totalHours > 0 ? totalHours : undefined;
+  }
+
+  return parseEstimateToHours(trimmed);
 }
 
 export function parseEstimateToHours(value: string) {
@@ -191,23 +338,9 @@ export function parseEstimateToHours(value: string) {
 
   const amount = Number(matched[1]);
   const unit = matched[2] ?? "h";
+  const hours = convertEstimateAmountToHours(amount, unit);
 
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return undefined;
-  }
-
-  switch (unit) {
-    case "w":
-      return amount * 5 * HOURS_PER_WORK_DAY;
-    case "d":
-      return amount * HOURS_PER_WORK_DAY;
-    case "h":
-      return amount;
-    case "m":
-      return amount / 60;
-    default:
-      return undefined;
-  }
+  return hours > 0 ? hours : undefined;
 }
 
 export function splitTemplateItemLine(line: string) {
