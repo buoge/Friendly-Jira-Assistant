@@ -19,7 +19,7 @@ import {
 } from "../shared/jiraUser";
 import { validateJiraServerUrl } from "../shared/jiraUrl";
 import { getStoryPointsFromFields } from "../shared/jiraStoryPoints";
-import { resolveSubtaskCategory } from "../shared/subtaskTemplates";
+import { formatHoursAsWorkDays, parseEstimateToHours, resolveSubtaskCategory } from "../shared/subtaskTemplates";
 import { showTemplateApplyDialog } from "./templateApplyDialog";
 import { initTemplateViews, renderTemplateManager } from "./templateViews";
 
@@ -1133,6 +1133,17 @@ function createIssueElement(issue: IssueWithSubtasks) {
     metaElement.append(storyPointsElement);
   }
 
+  if (issue.subtasks.length > 0) {
+    const totalHours = issue.subtasks.reduce((total, subtask) => {
+      const estimate = subtask.fields.timetracking?.originalEstimate ?? "";
+      return total + (parseEstimateToHours(estimate) ?? 0);
+    }, 0);
+    const workDaysElement = document.createElement("span");
+    workDaysElement.className = "issue-row__work-days";
+    workDaysElement.textContent = `工时：【${formatHoursAsWorkDays(totalHours)}d】`;
+    metaElement.append(workDaysElement);
+  }
+
   metaElement.append(statusElement);
 
   const summaryElement = document.createElement("p");
@@ -1584,6 +1595,10 @@ function showBatchCreateMessage(element: HTMLParagraphElement, message: string, 
   element.dataset.type = type;
 }
 
+function updateSubtaskEstimateInvalidState(estimateInput: HTMLInputElement) {
+  estimateInput.classList.toggle("subtask-row__estimate--empty", !estimateInput.value.trim());
+}
+
 function createSubtaskElement(issue: JiraBoardIssue) {
   const issueElement = document.createElement("article");
   issueElement.className = "subtask-row";
@@ -1599,29 +1614,15 @@ function createSubtaskElement(issue: JiraBoardIssue) {
   const mainElement = document.createElement("div");
   mainElement.className = "subtask-row__main";
 
-  const contentElement = document.createElement("div");
-  contentElement.className = "subtask-row__content";
-
-  const metaElement = document.createElement("div");
-  metaElement.className = "subtask-row__meta";
-
-  const typeElement = document.createElement("span");
-  typeElement.className = "issue-row__type";
-  typeElement.textContent = issueType;
-
-  const keyElement = document.createElement("a");
-  keyElement.href = getIssueBrowseUrl(issue.key);
-  keyElement.target = "_blank";
-  keyElement.rel = "noreferrer";
-  keyElement.className = "issue-row__key";
-  keyElement.textContent = issue.key;
-
-  const statusElement = document.createElement("span");
-  statusElement.className = "issue-row__status";
-  statusElement.textContent = status;
-
-  const summaryElement = document.createElement("p");
-  summaryElement.textContent = summary;
+  const summaryField = document.createElement("label");
+  summaryField.className = "subtask-row__field subtask-row__summary-field";
+  const summaryLabel = document.createElement("span");
+  summaryLabel.textContent = "任务名称";
+  const summaryInput = document.createElement("input");
+  summaryInput.type = "text";
+  summaryInput.value = summary;
+  summaryInput.placeholder = "子任务名称";
+  summaryField.append(summaryLabel, summaryInput);
 
   const editorElement = document.createElement("div");
   editorElement.className = "subtask-row__editor";
@@ -1645,6 +1646,10 @@ function createSubtaskElement(issue: JiraBoardIssue) {
   const estimateInput = document.createElement("input");
   estimateInput.value = originalEstimate;
   estimateInput.placeholder = "例如 4h";
+  updateSubtaskEstimateInvalidState(estimateInput);
+  estimateInput.addEventListener("input", () => {
+    updateSubtaskEstimateInvalidState(estimateInput);
+  });
   estimateField.append(estimateLabel, estimateInput);
 
   const assigneeField = document.createElement("label");
@@ -1664,14 +1669,32 @@ function createSubtaskElement(issue: JiraBoardIssue) {
   messageElement.className = "subtask-row__message";
   messageElement.setAttribute("role", "status");
 
-  editorElement.append(categoryField, estimateField, assigneeField, saveButton, messageElement);
+  editorElement.append(summaryField, categoryField, estimateField, assigneeField, saveButton, messageElement);
+
+  const metaElement = document.createElement("div");
+  metaElement.className = "subtask-row__meta";
+
+  const typeElement = document.createElement("span");
+  typeElement.className = "issue-row__type";
+  typeElement.textContent = issueType;
+
+  const keyElement = document.createElement("a");
+  keyElement.href = getIssueBrowseUrl(issue.key);
+  keyElement.target = "_blank";
+  keyElement.rel = "noreferrer";
+  keyElement.className = "issue-row__key";
+  keyElement.textContent = issue.key;
+
+  const statusElement = document.createElement("span");
+  statusElement.className = "issue-row__status";
+  statusElement.textContent = status;
+
   metaElement.append(typeElement, keyElement, statusElement);
-  contentElement.append(metaElement, summaryElement);
-  mainElement.append(contentElement, editorElement);
+  mainElement.append(metaElement, editorElement);
   issueElement.append(mainElement);
 
   saveButton.addEventListener("click", () => {
-    void saveSubtaskEdits(issue, categorySelect, estimateInput, assigneeInput, saveButton, messageElement);
+    void saveSubtaskEdits(issue, summaryInput, categorySelect, estimateInput, assigneeInput, saveButton, messageElement);
   });
 
   return issueElement;
@@ -1712,6 +1735,7 @@ function getIssueSubtaskCategory(issue: JiraBoardIssue): SubtaskCategoryOption |
 
 async function saveSubtaskEdits(
   issue: JiraBoardIssue,
+  summaryInput: HTMLInputElement,
   categorySelect: HTMLSelectElement,
   estimateInput: HTMLInputElement,
   assigneeInput: HTMLInputElement,
@@ -1719,9 +1743,20 @@ async function saveSubtaskEdits(
   messageElement: HTMLSpanElement
 ) {
   const category = subtaskCategoryOptions.find((option) => getCategoryOptionValue(option) === categorySelect.value);
+  const summary = summaryInput.value.trim();
+  const originalSummary = issue.fields.summary ?? "";
   const estimate = estimateInput.value.trim();
   const assignee = assigneeInput.value.trim();
   const fields: JiraIssueFields = {};
+
+  if (summary !== originalSummary) {
+    if (!summary) {
+      showSubtaskEditMessage(messageElement, "任务名称不能为空。", "error");
+      return;
+    }
+
+    fields.summary = summary;
+  }
 
   if (category) {
     fields.customfield_14102 = {
@@ -1755,6 +1790,10 @@ async function saveSubtaskEdits(
 
   try {
     await updateJiraIssueFields(currentJiraServerUrl, issue.key, fields);
+    if (fields.summary) {
+      issue.fields.summary = fields.summary;
+    }
+    updateSubtaskEstimateInvalidState(estimateInput);
     showSubtaskEditMessage(messageElement, "已保存。", "success");
   } catch (error) {
     showSubtaskEditMessage(messageElement, getErrorMessage(error), "error");

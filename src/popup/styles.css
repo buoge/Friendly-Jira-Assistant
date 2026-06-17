@@ -605,6 +605,13 @@ textarea:disabled {
   font-weight: 800;
 }
 
+.issue-row__work-days {
+  flex-shrink: 0;
+  color: #172b4d;
+  font-size: 14px;
+  font-weight: 800;
+}
+
 .issue-row__type,
 .issue-row__status {
   flex: 0 0 auto;
@@ -683,14 +690,7 @@ textarea:disabled {
 
 .subtask-row__main {
   display: grid;
-  grid-template-columns: minmax(300px, 0.9fr) minmax(560px, 1.6fr);
-  align-items: start;
-  gap: 14px;
-}
-
-.subtask-row__content {
-  display: grid;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -710,9 +710,16 @@ textarea:disabled {
 
 .subtask-row__editor {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(100px, 0.45fr) minmax(140px, 0.6fr) auto minmax(90px, auto);
+  grid-template-columns:
+    minmax(180px, 1.3fr)
+    minmax(200px, 1fr)
+    minmax(90px, 0.42fr)
+    minmax(120px, 0.55fr)
+    auto
+    minmax(90px, auto);
   align-items: end;
   gap: 8px;
+  min-width: 0;
 }
 
 .subtask-row__field {
@@ -743,6 +750,18 @@ textarea:disabled {
 .subtask-row__field select:focus {
   border-color: #2684ff;
   box-shadow: 0 0 0 2px #deebff;
+}
+
+.subtask-row__estimate--empty {
+  border: 2px solid #bf2600;
+  background: #ffebe6;
+  box-shadow: 0 0 0 3px rgba(191, 38, 0, 0.18);
+}
+
+.subtask-row__estimate--empty:focus {
+  border-color: #bf2600;
+  background: #ffebe6;
+  box-shadow: 0 0 0 3px rgba(191, 38, 0, 0.28);
 }
 
 .subtask-row__editor button {
