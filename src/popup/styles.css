@@ -875,6 +875,47 @@ textarea:disabled {
   color: #006644;
 }
 
+.subtask-row__message[data-type="dirty"] {
+  color: #0052cc;
+}
+
+.subtask-row__save-all {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #fafbfc;
+}
+
+.subtask-row__save-all-message {
+  min-height: 18px;
+  color: #42526e;
+  font-size: 12px;
+}
+
+.subtask-row__save-all-message[data-type="error"] {
+  color: #bf2600;
+}
+
+.subtask-row__save-all-message[data-type="success"] {
+  color: #006644;
+}
+
+.subtask-row__save-all button {
+  padding: 8px 14px;
+  color: #ffffff;
+  background: #0052cc;
+  border: 0;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.issue-row--preview .subtask-row__save-all {
+  display: none;
+}
+
 .batch-create {
   display: grid;
   gap: 12px;

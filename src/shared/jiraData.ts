@@ -330,6 +330,10 @@ export async function createJiraSubtaskWithWebForm(jiraServerUrl: string, fields
   formDocument.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
     "#subtask-create-details input[name], #subtask-create-details select[name], #subtask-create-details textarea[name]"
   ).forEach((element) => {
+    if (element.name === "assignee") {
+      return;
+    }
+
     if (element instanceof HTMLInputElement && ["file", "submit", "button"].includes(element.type)) {
       return;
     }
@@ -353,7 +357,7 @@ export async function createJiraSubtaskWithWebForm(jiraServerUrl: string, fields
 
   formData.set("summary", fields.summary);
   formData.set("parentIssueId", fields.parentIssueId);
-  formData.set("assignee", "-1");
+  formData.set("assignee", "");
   formData.set("customfield_14102", fields.categoryParentId);
   formData.set("customfield_14102:1", fields.categoryChildId);
 

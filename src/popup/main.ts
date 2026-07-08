@@ -1299,7 +1299,8 @@ function createIssueElement(issue: IssueWithSubtasks) {
   subtaskListElement.className = "issue-row__subtasks";
 
   if (issue.subtasks.length) {
-    subtaskListElement.replaceChildren(...issue.subtasks.map((subtask) => createSubtaskElement(subtask)));
+    const subtaskElements = issue.subtasks.map((subtask) => createSubtaskElement(subtask));
+    subtaskListElement.append(...subtaskElements, createSubtaskSaveAllFooter(subtaskElements));
   } else {
     const emptyElement = document.createElement("p");
     emptyElement.className = "issue-row__subtasks-empty";
@@ -1726,6 +1727,138 @@ function updateSubtaskEstimateInvalidState(estimateInput: HTMLInputElement) {
   estimateInput.classList.toggle("subtask-row__estimate--empty", !estimateInput.value.trim());
 }
 
+type SubtaskEditorState = {
+  assigneeSelect: HTMLSelectElement;
+  categorySelect: HTMLSelectElement;
+  estimateInput: HTMLInputElement;
+  issue: JiraBoardIssue;
+  messageElement: HTMLSpanElement;
+  saveButton: HTMLButtonElement;
+  summaryInput: HTMLInputElement;
+};
+
+const subtaskEditorStates = new WeakMap<HTMLElement, SubtaskEditorState>();
+
+function getSubtaskEditorBaseline(issue: JiraBoardIssue) {
+  const category = getIssueSubtaskCategory(issue);
+
+  return {
+    assignee: issue.fields.assignee?.name ?? "",
+    categoryValue: category ? getCategoryOptionValue(category) : "",
+    estimate: issue.fields.timetracking?.originalEstimate ?? "",
+    summary: issue.fields.summary ?? ""
+  };
+}
+
+function hasSubtaskEdits(state: SubtaskEditorState) {
+  const baseline = getSubtaskEditorBaseline(state.issue);
+
+  return (
+    state.summaryInput.value.trim() !== baseline.summary ||
+    state.categorySelect.value !== baseline.categoryValue ||
+    state.estimateInput.value.trim() !== baseline.estimate ||
+    state.assigneeSelect.value.trim() !== baseline.assignee
+  );
+}
+
+function refreshSubtaskDirtyMessage(state: SubtaskEditorState) {
+  if (state.saveButton.disabled) {
+    return;
+  }
+
+  if (hasSubtaskEdits(state)) {
+    showSubtaskEditMessage(state.messageElement, "有修改", "dirty");
+    return;
+  }
+
+  if (state.messageElement.dataset.type === "dirty" || state.messageElement.dataset.type === "error") {
+    showSubtaskEditMessage(state.messageElement, "", "success");
+  }
+}
+
+function bindSubtaskEditorChangeTracking(state: SubtaskEditorState) {
+  const handleChange = () => {
+    refreshSubtaskDirtyMessage(state);
+  };
+
+  state.summaryInput.addEventListener("input", handleChange);
+  state.categorySelect.addEventListener("change", handleChange);
+  state.estimateInput.addEventListener("input", handleChange);
+  state.assigneeSelect.addEventListener("change", handleChange);
+}
+
+function createSubtaskSaveAllFooter(subtaskElements: HTMLElement[]) {
+  const footerElement = document.createElement("div");
+  footerElement.className = "subtask-row__save-all";
+
+  const messageElement = document.createElement("span");
+  messageElement.className = "subtask-row__save-all-message";
+  messageElement.setAttribute("role", "status");
+
+  const saveAllButton = document.createElement("button");
+  saveAllButton.type = "button";
+  saveAllButton.textContent = "全部保存";
+  saveAllButton.addEventListener("click", () => {
+    void saveAllModifiedSubtasks(subtaskElements, saveAllButton, messageElement);
+  });
+
+  footerElement.append(messageElement, saveAllButton);
+
+  return footerElement;
+}
+
+async function saveAllModifiedSubtasks(
+  subtaskElements: HTMLElement[],
+  saveAllButton: HTMLButtonElement,
+  messageElement: HTMLSpanElement
+) {
+  const modifiedStates = subtaskElements
+    .map((subtaskElement) => subtaskEditorStates.get(subtaskElement))
+    .filter((state): state is SubtaskEditorState => Boolean(state))
+    .filter((state) => hasSubtaskEdits(state));
+
+  if (!modifiedStates.length) {
+    showSubtaskEditMessage(messageElement, "没有可保存的修改。", "error");
+    return;
+  }
+
+  setButtonDisabled(saveAllButton, true);
+  showSubtaskEditMessage(messageElement, "保存中...", "success");
+
+  let savedCount = 0;
+  let failedCount = 0;
+
+  for (const state of modifiedStates) {
+    const saved = await saveSubtaskEdits(
+      state.issue,
+      state.summaryInput,
+      state.categorySelect,
+      state.estimateInput,
+      state.assigneeSelect,
+      state.saveButton,
+      state.messageElement
+    );
+
+    if (saved) {
+      savedCount += 1;
+    } else {
+      failedCount += 1;
+    }
+  }
+
+  if (failedCount) {
+    showSubtaskEditMessage(
+      messageElement,
+      savedCount ? `${savedCount} 个已保存，${failedCount} 个失败。` : "保存失败，请检查各子任务提示。",
+      "error"
+    );
+  } else {
+    showSubtaskEditMessage(messageElement, "已保存。", "success");
+  }
+
+  setButtonDisabled(saveAllButton, false);
+}
+
 function setIssuePreviewMode(
   issueElement: HTMLElement,
   previewModeButton: HTMLButtonElement,
@@ -1862,8 +1995,29 @@ function createSubtaskElement(issue: JiraBoardIssue) {
   mainElement.append(metaElement, previewElement, editorElement);
   issueElement.append(mainElement);
 
+  const editorState: SubtaskEditorState = {
+    assigneeSelect,
+    categorySelect,
+    estimateInput,
+    issue,
+    messageElement,
+    saveButton,
+    summaryInput
+  };
+
+  subtaskEditorStates.set(issueElement, editorState);
+  bindSubtaskEditorChangeTracking(editorState);
+
   saveButton.addEventListener("click", () => {
-    void saveSubtaskEdits(issue, summaryInput, categorySelect, estimateInput, assigneeSelect, saveButton, messageElement);
+    void saveSubtaskEdits(
+      issue,
+      summaryInput,
+      categorySelect,
+      estimateInput,
+      assigneeSelect,
+      saveButton,
+      messageElement
+    );
   });
 
   return issueElement;
@@ -1945,26 +2099,31 @@ async function saveSubtaskEdits(
   assigneeSelect: HTMLSelectElement,
   saveButton: HTMLButtonElement,
   messageElement: HTMLSpanElement
-) {
+): Promise<boolean> {
   const category = subtaskCategoryOptions.find((option) => getCategoryOptionValue(option) === categorySelect.value);
   const summary = summaryInput.value.trim();
   const originalSummary = issue.fields.summary ?? "";
   const originalAssigneeName = issue.fields.assignee?.name ?? "";
+  const originalCategory = getIssueSubtaskCategory(issue);
+  const originalCategoryValue = originalCategory ? getCategoryOptionValue(originalCategory) : "";
+  const originalEstimate = issue.fields.timetracking?.originalEstimate ?? "";
   const estimate = estimateInput.value.trim();
   const assignee = assigneeSelect.value.trim();
   const assigneeChanged = assignee !== originalAssigneeName;
+  const categoryChanged = categorySelect.value !== originalCategoryValue;
+  const estimateChanged = estimate !== originalEstimate;
   const fields: JiraIssueFields = {};
 
   if (summary !== originalSummary) {
     if (!summary) {
       showSubtaskEditMessage(messageElement, "任务名称不能为空。", "error");
-      return;
+      return false;
     }
 
     fields.summary = summary;
   }
 
-  if (category) {
+  if (categoryChanged && category) {
     fields.customfield_14102 = {
       id: category.primaryId,
       child: {
@@ -1973,7 +2132,7 @@ async function saveSubtaskEdits(
     };
   }
 
-  if (estimate) {
+  if (estimateChanged && estimate) {
     fields.timetracking = {
       originalEstimate: estimate,
       remainingEstimate: estimate
@@ -1983,13 +2142,13 @@ async function saveSubtaskEdits(
   if (assigneeChanged) {
     if (!issue.id) {
       showSubtaskEditMessage(messageElement, "缺少问题 id，无法更新经办人。", "error");
-      return;
+      return false;
     }
   }
 
   if (!Object.keys(fields).length && !assigneeChanged) {
     showSubtaskEditMessage(messageElement, "没有可保存的字段。", "error");
-    return;
+    return false;
   }
 
   setButtonDisabled(saveButton, true);
@@ -2001,6 +2160,24 @@ async function saveSubtaskEdits(
 
       if (fields.summary) {
         issue.fields.summary = fields.summary;
+      }
+
+      if (fields.customfield_14102 && category) {
+        issue.fields.customfield_14102 = {
+          child: {
+            id: category.secondaryId,
+            value: category.secondary
+          },
+          id: category.primaryId,
+          value: category.primary
+        };
+      }
+
+      if (fields.timetracking) {
+        issue.fields.timetracking = {
+          originalEstimate: estimate,
+          remainingEstimate: estimate
+        };
       }
     }
 
@@ -2020,14 +2197,20 @@ async function saveSubtaskEdits(
 
     updateSubtaskEstimateInvalidState(estimateInput);
     showSubtaskEditMessage(messageElement, "已保存。", "success");
+    return true;
   } catch (error) {
     showSubtaskEditMessage(messageElement, getErrorMessage(error), "error");
+    return false;
   } finally {
     setButtonDisabled(saveButton, false);
   }
 }
 
-function showSubtaskEditMessage(element: HTMLSpanElement, message: string, type: "error" | "success") {
+function showSubtaskEditMessage(
+  element: HTMLSpanElement,
+  message: string,
+  type: "dirty" | "error" | "success"
+) {
   element.textContent = message;
   element.dataset.type = type;
 }
