@@ -6,6 +6,7 @@ import {
   fetchJiraProjects,
   getCachedStoryPointsFieldId,
   fetchProjectBoards,
+  updateJiraIssueAssignee,
   updateJiraIssueFields,
   type JiraBoardIssue,
   type JiraIssueFields,
@@ -27,8 +28,18 @@ import {
   parseJiraTimeEstimateToHours,
   resolveSubtaskCategory
 } from "../shared/subtaskTemplates";
+import { initAssigneeViews, renderAssigneeManager } from "./assigneeViews";
 import { showTemplateApplyDialog } from "./templateApplyDialog";
 import { initTemplateViews, renderTemplateManager } from "./templateViews";
+import {
+  ensureAssigneeFromUser,
+  findAssigneeByName,
+  formatAssigneeLabel,
+  getCachedAssignees,
+  getJiraAssignees,
+  jiraAssigneesStorageKey,
+  resetAssigneeCache
+} from "../shared/jiraAssignees";
 
 type JiraProjectConfig = {
   key: string;
@@ -201,6 +212,9 @@ const storyIssuesList = document.querySelector<HTMLDivElement>("#story-issues-li
 const templateTabs = document.querySelector<HTMLElement>("#template-tabs");
 const templateTabPanels = document.querySelector<HTMLElement>("#template-tab-panels");
 const createTemplateButton = document.querySelector<HTMLButtonElement>("#create-template");
+const addAssigneeButton = document.querySelector<HTMLButtonElement>("#add-assignee");
+const assigneeListElement = document.querySelector<HTMLElement>("#assignee-list");
+const assigneeMessageElement = document.querySelector<HTMLParagraphElement>("#assignee-message");
 let currentJiraServerUrl = "";
 let currentProjectConfig: JiraProjectConfig | null = null;
 let currentStoryBoardConfig: StoryBoardConfig | null = null;
@@ -217,6 +231,8 @@ async function loadSettings() {
     [storyBoardStorageKey]: storyBoard
   } = await chrome.storage.sync.get([storageKey, profileStorageKey, projectStorageKey, storyBoardStorageKey]);
   const savedUrl = String(jiraServerUrl);
+
+  await getJiraAssignees();
 
   if (isStoredProfile(jiraProfile)) {
     renderProfile(jiraProfile.displayName, jiraProfile.avatarUrl);
@@ -402,6 +418,7 @@ async function loadJiraProfile(jiraServerUrl: string, showStatus: boolean) {
         avatarUrl
       }
     });
+    await ensureAssigneeFromUser(user);
 
     if (showStatus) {
       showMessage(jiraUrlMessage, "Jira profile loaded.", "success");
@@ -587,10 +604,15 @@ function activateView(targetView: string) {
 
   if (targetView === "story-subtasks") {
     void loadStoryBoards();
+    void getJiraAssignees();
   }
 
   if (targetView === "task-templates") {
     void renderTemplateManager();
+  }
+
+  if (targetView === "assignee-manager") {
+    void renderAssigneeManager();
   }
 }
 
@@ -1792,10 +1814,9 @@ function createSubtaskElement(issue: JiraBoardIssue) {
   assigneeField.className = "subtask-row__field";
   const assigneeTextLabel = document.createElement("span");
   assigneeTextLabel.textContent = "经办人";
-  const assigneeInput = document.createElement("input");
-  assigneeInput.value = assigneeName;
-  assigneeInput.placeholder = assigneeLabel || "用户名";
-  assigneeField.append(assigneeTextLabel, assigneeInput);
+  const assigneeSelect = document.createElement("select");
+  populateAssigneeSelect(assigneeSelect, assigneeName, assigneeLabel);
+  assigneeField.append(assigneeTextLabel, assigneeSelect);
 
   const saveButton = document.createElement("button");
   saveButton.type = "button";
@@ -1807,13 +1828,16 @@ function createSubtaskElement(issue: JiraBoardIssue) {
 
   editorElement.append(summaryField, categoryField, estimateField, assigneeField, saveButton, messageElement);
 
+  const previewAssigneeLabel =
+    findAssigneeByName(assigneeName, getCachedAssignees())?.displayName || assigneeLabel || assigneeName;
+
   const previewElement = document.createElement("div");
   previewElement.className = "subtask-row__preview";
   previewElement.append(
     createSubtaskPreviewField("任务名称", summary),
     createSubtaskPreviewField("任务分类", category ? `${category.primary} / ${category.secondary}` : "未设置"),
     createSubtaskPreviewField("初始预估", originalEstimate || "—", { empty: !originalEstimate.trim() }),
-    createSubtaskPreviewField("经办人", assigneeLabel || assigneeName || "—")
+    createSubtaskPreviewField("经办人", previewAssigneeLabel || "未分配")
   );
 
   const metaElement = document.createElement("div");
@@ -1839,7 +1863,7 @@ function createSubtaskElement(issue: JiraBoardIssue) {
   issueElement.append(mainElement);
 
   saveButton.addEventListener("click", () => {
-    void saveSubtaskEdits(issue, summaryInput, categorySelect, estimateInput, assigneeInput, saveButton, messageElement);
+    void saveSubtaskEdits(issue, summaryInput, categorySelect, estimateInput, assigneeSelect, saveButton, messageElement);
   });
 
   return issueElement;
@@ -1878,20 +1902,57 @@ function getIssueSubtaskCategory(issue: JiraBoardIssue): SubtaskCategoryOption |
   );
 }
 
+function populateAssigneeSelect(selectElement: HTMLSelectElement, selectedName: string, fallbackLabel = "") {
+  const assignees = getCachedAssignees();
+  const normalizedSelectedName = selectedName.trim().toLowerCase();
+  const options: Array<{ label: string; value: string }> = [{ label: "未分配", value: "" }];
+
+  assignees.forEach((assignee) => {
+    options.push({
+      label: formatAssigneeLabel(assignee),
+      value: assignee.name
+    });
+  });
+
+  if (
+    normalizedSelectedName &&
+    !assignees.some((assignee) => assignee.name.toLowerCase() === normalizedSelectedName)
+  ) {
+    options.push({
+      label: fallbackLabel ? `${fallbackLabel} (${selectedName})` : selectedName,
+      value: selectedName
+    });
+  }
+
+  selectElement.replaceChildren(
+    ...options.map((option) => {
+      const optionElement = document.createElement("option");
+      optionElement.value = option.value;
+      optionElement.textContent = option.label;
+      return optionElement;
+    })
+  );
+
+  selectElement.value =
+    options.find((option) => option.value.toLowerCase() === normalizedSelectedName)?.value ?? "";
+}
+
 async function saveSubtaskEdits(
   issue: JiraBoardIssue,
   summaryInput: HTMLInputElement,
   categorySelect: HTMLSelectElement,
   estimateInput: HTMLInputElement,
-  assigneeInput: HTMLInputElement,
+  assigneeSelect: HTMLSelectElement,
   saveButton: HTMLButtonElement,
   messageElement: HTMLSpanElement
 ) {
   const category = subtaskCategoryOptions.find((option) => getCategoryOptionValue(option) === categorySelect.value);
   const summary = summaryInput.value.trim();
   const originalSummary = issue.fields.summary ?? "";
+  const originalAssigneeName = issue.fields.assignee?.name ?? "";
   const estimate = estimateInput.value.trim();
-  const assignee = assigneeInput.value.trim();
+  const assignee = assigneeSelect.value.trim();
+  const assigneeChanged = assignee !== originalAssigneeName;
   const fields: JiraIssueFields = {};
 
   if (summary !== originalSummary) {
@@ -1919,13 +1980,14 @@ async function saveSubtaskEdits(
     };
   }
 
-  if (assignee) {
-    fields.assignee = {
-      name: assignee
-    };
+  if (assigneeChanged) {
+    if (!issue.id) {
+      showSubtaskEditMessage(messageElement, "缺少问题 id，无法更新经办人。", "error");
+      return;
+    }
   }
 
-  if (!Object.keys(fields).length) {
+  if (!Object.keys(fields).length && !assigneeChanged) {
     showSubtaskEditMessage(messageElement, "没有可保存的字段。", "error");
     return;
   }
@@ -1934,10 +1996,28 @@ async function saveSubtaskEdits(
   showSubtaskEditMessage(messageElement, "保存中...", "success");
 
   try {
-    await updateJiraIssueFields(currentJiraServerUrl, issue.key, fields);
-    if (fields.summary) {
-      issue.fields.summary = fields.summary;
+    if (Object.keys(fields).length) {
+      await updateJiraIssueFields(currentJiraServerUrl, issue.key, fields);
+
+      if (fields.summary) {
+        issue.fields.summary = fields.summary;
+      }
     }
+
+    if (assigneeChanged) {
+      await updateJiraIssueAssignee(currentJiraServerUrl, issue.key, issue.id, assignee || null);
+
+      if (assignee) {
+        const matchedAssignee = findAssigneeByName(assignee, getCachedAssignees());
+        issue.fields.assignee = {
+          displayName: matchedAssignee?.displayName ?? assignee,
+          name: assignee
+        };
+      } else {
+        issue.fields.assignee = null;
+      }
+    }
+
     updateSubtaskEstimateInvalidState(estimateInput);
     showSubtaskEditMessage(messageElement, "已保存。", "success");
   } catch (error) {
@@ -2037,6 +2117,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     const storyBoardConfig = changes[storyBoardStorageKey].newValue;
     renderStoryBoardConfig(isStoredStoryBoard(storyBoardConfig) ? storyBoardConfig : null);
   }
+
+  if (changes[jiraAssigneesStorageKey]) {
+    resetAssigneeCache();
+    void getJiraAssignees();
+  }
 });
 
 loadSettings();
@@ -2045,4 +2130,10 @@ initTemplateViews({
   createTemplateButton,
   templateTabPanels,
   templateTabs
+});
+
+initAssigneeViews({
+  addAssigneeButton,
+  assigneeListElement,
+  assigneeMessageElement
 });

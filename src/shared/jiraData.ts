@@ -3,6 +3,7 @@ import {
   resolveStoryPointsFieldFromDefinitions,
   type JiraFieldDefinition
 } from "./jiraStoryPoints";
+import { fetchCurrentJiraUser, getJiraUserName } from "./jiraUser";
 
 export type JiraProject = {
   id: string;
@@ -390,6 +391,517 @@ export async function createJiraSubtaskWithWebForm(jiraServerUrl: string, fields
     key: createdKey,
     self: createResponse.url
   };
+}
+
+function appendNamedFormControl(
+  formData: URLSearchParams,
+  element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+) {
+  if (!element.name) {
+    return;
+  }
+
+  if (element instanceof HTMLInputElement && ["file", "submit", "button"].includes(element.type)) {
+    return;
+  }
+
+  if (element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio") && !element.checked) {
+    return;
+  }
+
+  if (element instanceof HTMLSelectElement) {
+    const selectedOptions = [...element.selectedOptions];
+
+    if (!selectedOptions.length) {
+      formData.append(element.name, element.value);
+      return;
+    }
+
+    selectedOptions.forEach((option) => {
+      formData.append(element.name, option.value);
+    });
+    return;
+  }
+
+  formData.append(element.name, element.value);
+}
+
+function collectNamedFormControls(scope: ParentNode) {
+  const formData = new URLSearchParams();
+
+  scope.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+    "input[name], select[name], textarea[name]"
+  ).forEach((element) => {
+    appendNamedFormControl(formData, element);
+  });
+
+  return formData;
+}
+
+function findQuickEditForm(document: Document) {
+  return (
+    document.querySelector<HTMLFormElement>("form[action*='QuickEditIssue']") ??
+    document.querySelector<HTMLFormElement>("form#quickedit-form") ??
+    document.querySelector<HTMLFormElement>("form#issue-edit") ??
+    document.querySelector<HTMLFormElement>("form[name='jiraform']") ??
+    document.querySelector<HTMLFormElement>("form.aui")
+  );
+}
+
+function findQuickEditScope(document: Document) {
+  const candidates: Array<ParentNode | null | undefined> = [
+    document.querySelector<HTMLElement>("#quickedit-form"),
+    findQuickEditForm(document),
+    document.querySelector<HTMLElement>("#edit-issue-dialog"),
+    document.querySelector<HTMLElement>(".quick-edit"),
+    document.querySelector<HTMLElement>("[data-issue-edit]"),
+    document.querySelector<HTMLElement>("form")
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate?.querySelector("input[name], select[name], textarea[name]")) {
+      return candidate;
+    }
+  }
+
+  if (document.querySelector("input[name], select[name], textarea[name]")) {
+    return document.body;
+  }
+
+  return null;
+}
+
+function parseQuickEditDocument(formHtml: string) {
+  const trimmed = formHtml.trim();
+
+  if (trimmed.startsWith("{")) {
+    try {
+      const payload = JSON.parse(trimmed) as Record<string, unknown>;
+      const embeddedHtml = ["html", "body", "content", "fragment"]
+        .map((key) => payload[key])
+        .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+      if (embeddedHtml) {
+        return new DOMParser().parseFromString(embeddedHtml, "text/html");
+      }
+    } catch {
+      // Fall back to HTML parsing below.
+    }
+  }
+
+  return new DOMParser().parseFromString(formHtml, "text/html");
+}
+
+function looksLikeQuickEditLoginPage(formHtml: string, document: Document) {
+  const normalized = formHtml.toLowerCase();
+
+  return (
+    normalized.includes("login-form") ||
+    normalized.includes("login.jsp") ||
+    normalized.includes("id=\"login-form\"") ||
+    Boolean(document.querySelector("#login-form"))
+  );
+}
+
+function hasMeaningfulQuickEditFields(formData: URLSearchParams) {
+  return [...formData.keys()].some(
+    (name) => name === "summary" || name === "priority" || name.startsWith("customfield_") || name.startsWith("timetracking_")
+  );
+}
+
+async function fetchAtlTokenFromBrowsePage(jiraServerUrl: string, issueKey: string, jiraUsername: string) {
+  const response = await fetch(`${jiraServerUrl}/browse/${encodeURIComponent(issueKey)}`, {
+    credentials: "include",
+    headers: getQuickEditHeaders(jiraUsername, undefined, "text/html"),
+    referrerPolicy: "no-referrer"
+  });
+
+  if (response.status >= 400) {
+    return "";
+  }
+
+  const html = await response.text();
+  return extractAtlToken(parseQuickEditDocument(html));
+}
+
+function restFieldValueToFormValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return "-1";
+    }
+
+    const firstValue = value[0];
+
+    if (typeof firstValue === "object" && firstValue && "id" in firstValue) {
+      return String((firstValue as { id?: string | number }).id ?? "");
+    }
+
+    return String(firstValue);
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+
+    if (record.id !== null && record.id !== undefined) {
+      return String(record.id);
+    }
+
+    if (typeof record.name === "string") {
+      return record.name;
+    }
+
+    if (typeof record.value === "string") {
+      return record.value;
+    }
+  }
+
+  return "";
+}
+
+function appendRestIssueFieldsToFormData(formData: URLSearchParams, fields: Record<string, unknown>) {
+  if (typeof fields.summary === "string") {
+    formData.set("summary", fields.summary);
+  }
+
+  const priorityValue = restFieldValueToFormValue(fields.priority);
+  if (priorityValue) {
+    formData.set("priority", priorityValue);
+  }
+
+  const componentsValue = restFieldValueToFormValue(fields.components);
+  if (componentsValue) {
+    formData.set("components", componentsValue);
+  }
+
+  const timetracking = fields.timetracking as
+    | {
+        originalEstimate?: string;
+        remainingEstimate?: string;
+      }
+    | undefined;
+
+  if (timetracking?.originalEstimate) {
+    formData.set("timetracking_originalestimate", timetracking.originalEstimate);
+  }
+
+  if (timetracking?.remainingEstimate) {
+    formData.set("timetracking_remainingestimate", timetracking.remainingEstimate);
+  }
+
+  if (fields.duedate === null || fields.duedate === undefined) {
+    formData.set("duedate", "");
+  } else {
+    formData.set("duedate", restFieldValueToFormValue(fields.duedate));
+  }
+
+  formData.set("description", restFieldValueToFormValue(fields.description));
+
+  const categoryField = fields.customfield_14102 as
+    | {
+        child?: { id?: string | number };
+        id?: string | number;
+      }
+    | undefined;
+
+  if (categoryField?.id !== undefined) {
+    formData.set("customfield_14102", String(categoryField.id));
+
+    if (categoryField.child?.id !== undefined) {
+      formData.set("customfield_14102:1", String(categoryField.child.id));
+    }
+  }
+
+  Object.entries(fields).forEach(([fieldName, fieldValue]) => {
+    if (!fieldName.startsWith("customfield_") || fieldName === "customfield_14102") {
+      return;
+    }
+
+    const cascadeField = fieldValue as { child?: { id?: string | number }; id?: string | number } | null | undefined;
+
+    if (cascadeField && typeof cascadeField === "object" && cascadeField.child?.id !== undefined) {
+      formData.set(fieldName, String(cascadeField.id ?? ""));
+      formData.set(`${fieldName}:1`, String(cascadeField.child.id));
+      return;
+    }
+
+    const formValue = restFieldValueToFormValue(fieldValue);
+    formData.set(fieldName, formValue || "-1");
+  });
+
+  formData.set("isCreateIssue", "");
+  formData.set("hasWorkStarted", "");
+  formData.set("comment", "");
+  formData.set("commentLevel", "");
+}
+
+async function buildQuickEditFormFromIssue(
+  jiraServerUrl: string,
+  issueId: string,
+  issueKey: string,
+  assigneeName: string | null,
+  jiraUsername: string,
+  atlTokenHint = ""
+) {
+  const issue = await jiraFetch<JiraBoardIssue>(
+    jiraServerUrl,
+    `/rest/api/2/issue/${encodeURIComponent(issueKey)}?fields=*all`
+  );
+  const atlToken = atlTokenHint || (await fetchAtlTokenFromBrowsePage(jiraServerUrl, issueKey, jiraUsername));
+  const formData = new URLSearchParams();
+
+  formData.set("id", issueId);
+  formData.set("formToken", "undefined");
+  formData.set("assignee", assigneeName ?? "");
+
+  if (atlToken) {
+    formData.set("atl_token", atlToken);
+  }
+
+  appendRestIssueFieldsToFormData(formData, issue.fields ?? {});
+
+  return formData;
+}
+
+async function loadQuickEditFormData(
+  jiraServerUrl: string,
+  issueId: string,
+  issueKey: string,
+  assigneeName: string | null,
+  jiraUsername: string
+) {
+  const query = `issueId=${encodeURIComponent(issueId)}&decorator=none`;
+  const formResponse = await fetch(`${jiraServerUrl}/secure/QuickEditIssue!default.jspa?${query}`, {
+    credentials: "include",
+    headers: getQuickEditHeaders(jiraUsername, undefined, "text/html"),
+    referrerPolicy: "no-referrer"
+  });
+
+  if (formResponse.status >= 400) {
+    throw new Error(`Jira returned HTTP ${formResponse.status} while loading the quick edit form.`);
+  }
+
+  const formHtml = await formResponse.text();
+
+  if (!formHtml.trim()) {
+    return buildQuickEditFormFromIssue(jiraServerUrl, issueId, issueKey, assigneeName, jiraUsername);
+  }
+
+  const formDocument = parseQuickEditDocument(formHtml);
+
+  if (looksLikeQuickEditLoginPage(formHtml, formDocument)) {
+    throw new Error("未能读取 Jira Quick Edit 表单，请确认已登录 Jira。");
+  }
+
+  const scope = findQuickEditScope(formDocument);
+
+  if (!scope) {
+    return buildQuickEditFormFromIssue(
+      jiraServerUrl,
+      issueId,
+      issueKey,
+      assigneeName,
+      jiraUsername,
+      extractAtlToken(formDocument)
+    );
+  }
+
+  const formData = collectNamedFormControls(scope);
+  const atlToken = extractAtlToken(formDocument) || (await fetchAtlTokenFromBrowsePage(jiraServerUrl, issueKey, jiraUsername));
+
+  if (!hasMeaningfulQuickEditFields(formData)) {
+    const fallbackFormData = await buildQuickEditFormFromIssue(
+      jiraServerUrl,
+      issueId,
+      issueKey,
+      assigneeName,
+      jiraUsername,
+      atlToken
+    );
+
+    formData.forEach((value, key) => {
+      if (!fallbackFormData.has(key)) {
+        fallbackFormData.append(key, value);
+      }
+    });
+
+    return fallbackFormData;
+  }
+
+  formData.set("id", issueId);
+  formData.set("assignee", assigneeName ?? "");
+  formData.set("formToken", formData.get("formToken") ?? "undefined");
+
+  if (atlToken) {
+    formData.set("atl_token", atlToken);
+  }
+
+  return formData;
+}
+
+function extractAtlToken(document: Document) {
+  const inputToken = document.querySelector<HTMLInputElement>('input[name="atl_token"]')?.value?.trim();
+
+  if (inputToken) {
+    return inputToken;
+  }
+
+  const metaToken =
+    document.querySelector<HTMLMetaElement>('meta[name="ajs-atlassian-token"]')?.content?.trim() ??
+    document.querySelector<HTMLMetaElement>('meta[name="atlassian-token"]')?.content?.trim();
+
+  return metaToken ?? "";
+}
+
+function getQuickEditHeaders(jiraUsername?: string, contentType?: string, accept = "*/*") {
+  const headers: Record<string, string> = {
+    Accept: accept,
+    "X-Requested-With": "XMLHttpRequest"
+  };
+
+  if (jiraUsername) {
+    headers["X-AUSERNAME"] = jiraUsername;
+  }
+
+  if (contentType) {
+    headers["Content-Type"] = contentType;
+  }
+
+  return headers;
+}
+
+async function resolveQuickEditUsername(jiraServerUrl: string) {
+  try {
+    const user = await fetchCurrentJiraUser(jiraServerUrl);
+    return getJiraUserName(user);
+  } catch {
+    return "";
+  }
+}
+
+function assertQuickEditResponseSucceeded(responseText: string) {
+  const normalized = responseText.toLowerCase();
+
+  if (
+    normalized.includes("class=\"error\"") ||
+    normalized.includes("class='error'") ||
+    normalized.includes("aui-message error") ||
+    normalized.includes("fielderror") ||
+    normalized.includes("errorMessages")
+  ) {
+    throw new Error("Jira Quick Edit 返回错误，经办人未更新。");
+  }
+}
+
+async function fetchIssueAssigneeName(jiraServerUrl: string, issueKey: string) {
+  const issue = await jiraFetch<{ fields?: { assignee?: { name?: string } | null } }>(
+    jiraServerUrl,
+    `/rest/api/2/issue/${encodeURIComponent(issueKey)}?fields=assignee`
+  );
+
+  return issue?.fields?.assignee?.name?.trim() ?? "";
+}
+
+async function updateJiraIssueAssigneeWithWebForm(
+  jiraServerUrl: string,
+  issueId: string,
+  issueKey: string,
+  assigneeName: string | null
+) {
+  const jiraUsername = await resolveQuickEditUsername(jiraServerUrl);
+  const query = `issueId=${encodeURIComponent(issueId)}&decorator=none`;
+  const formData = await loadQuickEditFormData(jiraServerUrl, issueId, issueKey, assigneeName, jiraUsername);
+
+  const updateResponse = await fetch(`${jiraServerUrl}/secure/QuickEditIssue.jspa?${query}`, {
+    body: formData,
+    credentials: "include",
+    headers: getQuickEditHeaders(
+      jiraUsername,
+      "application/x-www-form-urlencoded; charset=UTF-8"
+    ),
+    method: "POST",
+    referrerPolicy: "no-referrer"
+  });
+
+  const responseText = await updateResponse.text();
+
+  if (updateResponse.status >= 400) {
+    throw new Error(`Jira returned HTTP ${updateResponse.status} while updating assignee.`);
+  }
+
+  assertQuickEditResponseSucceeded(responseText);
+}
+
+export async function updateJiraIssueAssignee(
+  jiraServerUrl: string,
+  issueKey: string,
+  issueId: string,
+  assigneeName: string | null
+) {
+  const normalizedAssignee = assigneeName?.trim() ?? "";
+
+  if (normalizedAssignee) {
+    try {
+      await jiraFetch<Record<string, never>>(jiraServerUrl, `/rest/api/2/issue/${encodeURIComponent(issueKey)}`, {
+        body: JSON.stringify({
+          fields: {
+            assignee: {
+              name: normalizedAssignee
+            }
+          }
+        }),
+        method: "PUT"
+      });
+
+      const currentAssignee = await fetchIssueAssigneeName(jiraServerUrl, issueKey);
+
+      if (currentAssignee.toLowerCase() === normalizedAssignee.toLowerCase()) {
+        return;
+      }
+    } catch {
+      // Fall back to Quick Edit when REST assign fails on this Jira instance.
+    }
+  } else {
+    try {
+      await jiraFetch<Record<string, never>>(jiraServerUrl, `/rest/api/2/issue/${encodeURIComponent(issueKey)}`, {
+        body: JSON.stringify({
+          fields: {
+            assignee: null
+          }
+        }),
+        method: "PUT"
+      });
+
+      const currentAssignee = await fetchIssueAssigneeName(jiraServerUrl, issueKey);
+
+      if (!currentAssignee) {
+        return;
+      }
+    } catch {
+      // Fall back to Quick Edit when REST unassign fails on this Jira instance.
+    }
+  }
+
+  await updateJiraIssueAssigneeWithWebForm(jiraServerUrl, issueId, issueKey, normalizedAssignee || null);
+
+  const currentAssignee = await fetchIssueAssigneeName(jiraServerUrl, issueKey);
+  const expectedAssignee = normalizedAssignee.toLowerCase();
+  const actualAssignee = currentAssignee.toLowerCase();
+
+  if (expectedAssignee ? actualAssignee !== expectedAssignee : actualAssignee) {
+    throw new Error(
+      expectedAssignee
+        ? `经办人未更新成功，当前仍为「${currentAssignee || "未分配"}」。`
+        : "经办人未清空成功，请确认 Quick Edit 权限。"
+    );
+  }
 }
 
 export async function updateJiraIssueFields(jiraServerUrl: string, issueKey: string, fields: JiraIssueFields) {

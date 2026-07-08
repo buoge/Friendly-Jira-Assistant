@@ -19,6 +19,7 @@ type FormDialogOptions = {
   confirmLabel?: string;
   fields: DialogField[];
   title: string;
+  values?: Record<string, string>;
 };
 
 let dialogRoot: HTMLElement | null = null;
@@ -177,6 +178,12 @@ export function showFormDialog(options: FormDialogOptions) {
 
           if (field.placeholder) {
             controlElement.placeholder = field.placeholder;
+          }
+
+          const initialValue = options.values?.[field.id];
+
+          if (initialValue) {
+            controlElement.value = initialValue;
           }
 
           fieldElements.set(field.id, controlElement);

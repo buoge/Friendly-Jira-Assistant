@@ -36,6 +36,10 @@
               <span class="menu-item__icon" aria-hidden="true">M</span>
               <span>任务拆分模板</span>
             </button>
+            <button class="menu-item" type="button" data-view-target="assignee-manager">
+              <span class="menu-item__icon" aria-hidden="true">A</span>
+              <span>经办人管理</span>
+            </button>
           </section>
 
           <section>
@@ -152,6 +156,24 @@
               </p>
               <div id="template-tabs" class="template-tabs" role="tablist" aria-label="任务拆分模板"></div>
               <div id="template-tab-panels" class="template-tab-panels" aria-live="polite"></div>
+            </div>
+          </section>
+
+          <section class="view" data-view="assignee-manager">
+            <div class="content__heading content__heading--split">
+              <div>
+                <p>Tools</p>
+                <h2>经办人管理</h2>
+              </div>
+              <button id="add-assignee" class="button-primary" type="button">新增经办人</button>
+            </div>
+
+            <div class="assignee-panel">
+              <p class="assignee-panel__intro">
+                维护常用经办人列表。子任务编辑时可直接从列表中选择，无需每次手动输入 Jira 用户名。
+              </p>
+              <p id="assignee-message" class="form-message" role="status"></p>
+              <div id="assignee-list" class="assignee-list" aria-live="polite"></div>
             </div>
           </section>
         </section>
