@@ -1,21 +1,28 @@
 # Friendly Jira Assistant
 
+Friendly Jira Assistant 是一款 Jira 子任务拆分助手，帮助团队在迭代内快速创建、编辑和管理子任务。
 * Friendly Jira Assistant is a chrome extension for Jira pages.
 * Help us create subtasks faster and more efficiently.
 
-## 要解决的问题：
+## 功能介绍：
 
-jira中 每个子任务得一个个创建，选工作类型标签，选所在小组，没次都填很繁琐
-而且每个用户故事都有重复的 开发自测，功能测试，代码评审等 重复性任务，这个也得每次手动创建很繁琐
+### 连接与配置
+配置 Jira Server URL 与默认项目，自动识别登录用户
 
-现在可以这样：
-* 固定的任务可以自动创建
-* 前端- 开头的子任务会自动标记任务分类为：前端开发，后端-开头的子任务会被标记为任务分类为：后端开发
-* 可以批量创建子任务：
-  前端-开发任务1，4h
-  前端-开发任务2，5h
-  后端-开发任务3，6h
-  
+### 子任务拆分
+* 按迭代看板加载故事/任务/Bug，展示点数、工时、类型统计
+* 展开查看子任务，支持预览 / 编辑模式切换
+* 编辑子任务：名称、分类、预估、经办人；变更提示「有修改」，支持单条保存与全部保存
+* 批量创建缺失子任务（固定项 + 自定义），默认未分配，自动跳过已存在项
+* 一键应用拆分模板到批量创建区
+
+### 任务拆分模板
+* 内置 Web 新增组件、通用、Spec 等模板
+* 支持新增、编辑、删除、拖拽排序
+
+### 经办人管理
+维护常用经办人列表，子任务编辑时下拉选择，支持设为「未分配」
+
 
 ## Acknowledgements 致敬
 Special thanks to the Jira Assistant project for inspiring parts of the implementation approach:
@@ -32,6 +39,17 @@ https://github.com/shridhar-tl/jira-assistant
 
 ### subtask breakdown:
 ![subtask breakdown](./imgs/3-subtask-breakdown.png)
+
+jira 中每个子任务得一个个创建，选工作类型标签，选所在小组，没次都填很繁琐
+而且每个用户故事都有重复的 开发自测，功能测试，代码评审等 重复性任务，这个也得每次手动创建很繁琐
+
+现在可以这样：
+* 固定的任务可以自动创建
+* 前端- 开头的子任务会自动标记任务分类为：前端开发，后端-开头的子任务会被标记为任务分类为：后端开发
+* 可以批量创建子任务：
+  前端-开发任务1，4h
+  前端-开发任务2，5h
+  后端-开发任务3，6h
 
 
 ## Project Structure
