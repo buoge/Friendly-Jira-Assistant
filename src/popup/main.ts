@@ -65,7 +65,6 @@ type SubtaskCategory = {
 
 type SubtaskDraft = {
   category: SubtaskCategory;
-  checkedByDefault?: boolean;
   originalEstimate?: string;
   summary: string;
 };
@@ -137,55 +136,6 @@ const subtaskCategoryOptions: SubtaskCategoryOption[] = [
     primaryId: "41372",
     secondary: "功能测试",
     secondaryId: "41380"
-  }
-];
-const fixedSubtaskDrafts: SubtaskDraft[] = [
-  {
-    summary: "开发自测",
-    category: {
-      primary: "开发工作",
-      primaryId: "41359",
-      secondary: "开发自测",
-      secondaryId: "41366"
-    }
-  },
-  {
-    summary: "code review",
-    category: {
-      primary: "开发工作",
-      primaryId: "41359",
-      secondary: "代码公审",
-      secondaryId: "41368"
-    }
-  },
-  {
-    summary: "mini show",
-    category: {
-      primary: "开发工作",
-      primaryId: "41359",
-      secondary: "MiniShow",
-      secondaryId: "41367"
-    }
-  },
-  {
-    summary: "测试-用例编写",
-    checkedByDefault: false,
-    category: {
-      primary: "测试工作",
-      primaryId: "41372",
-      secondary: "用例编写",
-      secondaryId: "41377"
-    }
-  },
-  {
-    summary: "测试-用例执行",
-    checkedByDefault: false,
-    category: {
-      primary: "测试工作",
-      primaryId: "41372",
-      secondary: "功能测试",
-      secondaryId: "41380"
-    }
   }
 ];
 const jiraUrlForm = document.querySelector<HTMLFormElement>("#jira-url-form");
@@ -1345,36 +1295,16 @@ function createBatchCreatePanel(issue: IssueWithSubtasks) {
   headingMainElement.append(titleElement, applyTemplateButton);
   headingElement.append(headingMainElement, messageElement);
 
-  const fixedListElement = document.createElement("div");
-  fixedListElement.className = "batch-create__fixed";
-
-  const fixedCheckboxes = fixedSubtaskDrafts.map((draft) => {
-    const labelElement = document.createElement("label");
-    labelElement.className = "batch-create__check";
-
-    const checkboxElement = document.createElement("input");
-    checkboxElement.type = "checkbox";
-    checkboxElement.checked =
-      draft.checkedByDefault === false ? false : !isFixedSubtaskDraftCovered(issue, draft);
-    checkboxElement.value = draft.summary;
-
-    const textElement = document.createElement("span");
-    textElement.textContent = draft.summary;
-
-    labelElement.append(checkboxElement, textElement);
-    fixedListElement.append(labelElement);
-    return checkboxElement;
-  });
-
   const customFieldElement = document.createElement("label");
   customFieldElement.className = "batch-create__custom";
 
   const customLabelElement = document.createElement("span");
-  customLabelElement.textContent = "自定义前端/后端任务";
+  customLabelElement.textContent = "子任务列表";
 
   const customTextareaElement = document.createElement("textarea");
-  customTextareaElement.rows = 3;
-  customTextareaElement.placeholder = "每行一个任务，用逗号分隔名称和预估时间，例如：前端-开发任务1，4h";
+  customTextareaElement.rows = 5;
+  customTextareaElement.placeholder =
+    "每行一个任务，用逗号分隔名称和预估时间，例如：前端-开发任务1，4h\n也可通过「应用任务拆分模板」填入";
 
   customFieldElement.append(customLabelElement, customTextareaElement);
 
@@ -1389,22 +1319,19 @@ function createBatchCreatePanel(issue: IssueWithSubtasks) {
   createButtonElement.textContent = "创建缺失子任务";
 
   actionsElement.append(createButtonElement);
-  panelElement.append(headingElement, fixedListElement, customFieldElement, previewElement, actionsElement);
+  panelElement.append(headingElement, customFieldElement, previewElement, actionsElement);
 
   const refreshPreview = () => {
-    const preview = getBatchCreatePreview(issue, fixedCheckboxes, customTextareaElement.value);
+    const preview = getBatchCreatePreview(issue, customTextareaElement.value);
     renderBatchPreview(previewElement, preview);
     createButtonElement.disabled = preview.creatable.length === 0 || !currentProjectConfig;
   };
 
-  fixedCheckboxes.forEach((checkbox) => {
-    checkbox.addEventListener("change", refreshPreview);
-  });
   customTextareaElement.addEventListener("input", refreshPreview);
   refreshPreview();
 
   createButtonElement.addEventListener("click", () => {
-    void createMissingSubtasks(issue, fixedCheckboxes, customTextareaElement.value, createButtonElement, messageElement);
+    void createMissingSubtasks(issue, customTextareaElement.value, createButtonElement, messageElement);
   });
 
   applyTemplateButton.addEventListener("click", () => {
@@ -1423,7 +1350,7 @@ function createBatchCreatePanel(issue: IssueWithSubtasks) {
         return;
       }
 
-      applyTemplateItemsToBatchCreate(issue, items, fixedCheckboxes, customTextareaElement);
+      applyTemplateItemsToBatchCreate(items, customTextareaElement);
       refreshPreview();
       showBatchCreateMessage(messageElement, `已从模板填入 ${items.length} 项任务，请确认后创建。`, "success");
     })();
@@ -1432,102 +1359,21 @@ function createBatchCreatePanel(issue: IssueWithSubtasks) {
   return panelElement;
 }
 
-function findFixedSubtaskDraftIndex(summary: string) {
-  const normalizedSummary = normalizeSummary(summary);
-  const category = resolveSubtaskCategory(summary);
-
-  return fixedSubtaskDrafts.findIndex((draft) => {
-    if (normalizeSummary(draft.summary) === normalizedSummary) {
-      return true;
-    }
-
-    return (
-      category !== null &&
-      category.primaryId === draft.category.primaryId &&
-      category.secondaryId === draft.category.secondaryId
-    );
-  });
-}
-
 function applyTemplateItemsToBatchCreate(
-  issue: IssueWithSubtasks,
   items: Array<{ estimateHours: number; summary: string }>,
-  fixedCheckboxes: HTMLInputElement[],
   customTextareaElement: HTMLTextAreaElement
 ) {
-  fixedCheckboxes.forEach((checkbox) => {
-    checkbox.checked = false;
-  });
-
-  const customLines: string[] = [];
-
-  items.forEach((item) => {
-    const draftIndex = findFixedSubtaskDraftIndex(item.summary);
-
-    if (draftIndex >= 0) {
-      const draft = fixedSubtaskDrafts[draftIndex];
-
-      if (!isFixedSubtaskDraftCovered(issue, draft)) {
-        fixedCheckboxes[draftIndex].checked = true;
-      }
-
-      return;
-    }
-
-    if (getCustomTaskCategory(item.summary)) {
-      customLines.push(`${item.summary}，${item.estimateHours}h`);
-    }
-  });
-
-  customTextareaElement.value = customLines.join("\n");
+  customTextareaElement.value = items
+    .map((item) => `${item.summary}，${item.estimateHours}h`)
+    .join("\n");
 }
 
-function isFixedSubtaskDraftCovered(issue: IssueWithSubtasks, draft: SubtaskDraft) {
-  const normalizedDraftSummary = normalizeSummary(draft.summary);
-
-  return issue.subtasks.some((subtask) => {
-    if (normalizeSummary(subtask.fields.summary ?? "") === normalizedDraftSummary) {
-      return true;
-    }
-
-    const existingCategory = getIssueSubtaskCategory(subtask);
-
-    return (
-      existingCategory !== null &&
-      existingCategory.primaryId === draft.category.primaryId &&
-      existingCategory.secondaryId === draft.category.secondaryId
-    );
-  });
-}
-
-function getBatchCreatePreview(issue: IssueWithSubtasks, fixedCheckboxes: HTMLInputElement[], customTaskText: string) {
+function getBatchCreatePreview(issue: IssueWithSubtasks, customTaskText: string) {
   const existingSummaries = new Set(issue.subtasks.map((subtask) => normalizeSummary(subtask.fields.summary ?? "")));
-  const selectedFixedDrafts = fixedSubtaskDrafts.filter((draft, index) => fixedCheckboxes[index]?.checked);
   const customDraftResult = parseCustomTaskDrafts(customTaskText);
   const duplicateSummaries = new Set<string>();
   const creatable: SubtaskDraft[] = [];
   const skipped: string[] = [];
-
-  selectedFixedDrafts.forEach((draft) => {
-    const normalizedSummary = normalizeSummary(draft.summary);
-
-    if (!normalizedSummary) {
-      return;
-    }
-
-    if (isFixedSubtaskDraftCovered(issue, draft)) {
-      skipped.push(`${draft.summary}（已存在）`);
-      return;
-    }
-
-    if (duplicateSummaries.has(normalizedSummary)) {
-      skipped.push(`${draft.summary}（重复输入）`);
-      return;
-    }
-
-    duplicateSummaries.add(normalizedSummary);
-    creatable.push(draft);
-  });
 
   customDraftResult.drafts.forEach((draft) => {
     const normalizedSummary = normalizeSummary(draft.summary);
@@ -1571,7 +1417,7 @@ function renderBatchPreview(
       type: "muted"
     })),
     ...preview.invalid.map((summary) => ({
-      text: `${summary}（仅支持“前端”或“后端”开头）`,
+      text: `${summary}（无法识别任务分类）`,
       type: "error"
     }))
   ];
@@ -1579,7 +1425,7 @@ function renderBatchPreview(
   if (!previewItems.length) {
     const emptyElement = document.createElement("li");
     emptyElement.className = "batch-create__preview-empty";
-    emptyElement.textContent = "选择固定任务或输入自定义任务后会在这里预览。";
+    emptyElement.textContent = "输入任务或应用模板后会在这里预览。";
     previewElement.replaceChildren(emptyElement);
     return;
   }
@@ -1604,7 +1450,7 @@ function parseCustomTaskDrafts(customTaskText: string) {
     .filter(Boolean)
     .forEach((line) => {
       const parsedLine = parseCustomTaskLine(line);
-      const category = getCustomTaskCategory(parsedLine.summary);
+      const category = resolveSubtaskCategory(parsedLine.summary);
 
       if (!category) {
         invalid.push(line);
@@ -1633,31 +1479,8 @@ function parseCustomTaskLine(line: string) {
   };
 }
 
-function getCustomTaskCategory(summary: string): SubtaskCategory | null {
-  if (summary.startsWith("前端")) {
-    return {
-      primary: "开发工作",
-      primaryId: "41359",
-      secondary: "编码开发-前端",
-      secondaryId: "41364"
-    };
-  }
-
-  if (summary.startsWith("后端")) {
-    return {
-      primary: "开发工作",
-      primaryId: "41359",
-      secondary: "编码开发-后端",
-      secondaryId: "41365"
-    };
-  }
-
-  return null;
-}
-
 async function createMissingSubtasks(
   issue: IssueWithSubtasks,
-  fixedCheckboxes: HTMLInputElement[],
   customTaskText: string,
   createButtonElement: HTMLButtonElement,
   messageElement: HTMLParagraphElement
@@ -1667,7 +1490,7 @@ async function createMissingSubtasks(
     return;
   }
 
-  const preview = getBatchCreatePreview(issue, fixedCheckboxes, customTaskText);
+  const preview = getBatchCreatePreview(issue, customTaskText);
 
   if (!preview.creatable.length) {
     showBatchCreateMessage(messageElement, "没有需要创建的子任务。", "error");

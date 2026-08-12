@@ -979,32 +979,6 @@ textarea:disabled {
   color: #006644;
 }
 
-.batch-create__fixed {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.batch-create__check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 9px;
-  color: #172b4d;
-  background: #ffffff;
-  border: 1px solid #c1c7d0;
-  border-radius: 5px;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.batch-create__check input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-}
-
 .batch-create__custom {
   display: grid;
   gap: 7px;
