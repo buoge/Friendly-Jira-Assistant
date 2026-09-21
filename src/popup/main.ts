@@ -1503,7 +1503,7 @@ async function createMissingSubtasks(
   }
 
   setButtonDisabled(createButtonElement, true);
-  showBatchCreateMessage(messageElement, "正在通过 Jira 原生表单创建子任务...", "success");
+  showBatchCreateMessage(messageElement, "正在创建子任务并自动清空经办人...", "success");
 
   try {
     const createdKeys: string[] = [];
@@ -1521,17 +1521,22 @@ async function createMissingSubtasks(
 
     showBatchCreateMessage(
       messageElement,
-      `已创建 ${createdKeys.length} 个子任务${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
+      `已创建 ${createdKeys.length} 个子任务，经办人均已设为未分配${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
       "success"
     );
     pendingFocusIssueKey = issue.key;
     await loadStoryIssues();
     setStoryFilterMessage(
-      `已为 ${issue.key} 创建 ${createdKeys.length} 个子任务${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
+      `已为 ${issue.key} 创建 ${createdKeys.length} 个子任务，经办人均已设为未分配${preview.skipped.length ? `，跳过 ${preview.skipped.length} 个已存在/重复项` : ""}。`,
       "success"
     );
   } catch (error) {
-    showBatchCreateMessage(messageElement, getErrorMessage(error), "error");
+    const message = getErrorMessage(error);
+    showBatchCreateMessage(messageElement, message, "error");
+    // A failed unassign must not leave the list stale and invite duplicate creation.
+    pendingFocusIssueKey = issue.key;
+    await loadStoryIssues();
+    setStoryFilterMessage(message, "error");
   } finally {
     setButtonDisabled(createButtonElement, false);
   }

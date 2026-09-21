@@ -48,6 +48,18 @@ textarea:disabled {
 }
 
 .brand,
+.brand__versions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand .brand__build {
+  color: #5e6c84;
+  background: #ebecf0;
+  white-space: nowrap;
+}
+
 .profile {
   display: flex;
   align-items: center;

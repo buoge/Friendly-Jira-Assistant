@@ -388,7 +388,18 @@ export async function createJiraSubtaskWithWebForm(jiraServerUrl: string, fields
     throw new Error("Jira 原生表单创建失败：问题不存在。");
   }
 
-  const createdKey = createResponse.url.match(/browse\/([A-Z0-9]+-\d+)/)?.[1] ?? fields.summary;
+  const createdKey = createResponse.url.match(/browse\/([A-Z][A-Z0-9_]*-\d+)(?:[/?#]|$)/)?.[1];
+
+  if (!createdKey) {
+    throw new Error(`已提交「${fields.summary}」的创建请求，但未能确认子任务编号，无法自动清空经办人。请刷新并检查 Jira 中是否已创建，避免重复提交。`);
+  }
+
+  try {
+    await updateJiraIssueAssignee(jiraServerUrl, createdKey, "", null);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`子任务 ${createdKey} 已创建，但自动清空经办人失败：${detail} 请在该子任务上重试设为未分配，无需重新创建。`);
+  }
 
   return {
     id: "",
@@ -893,7 +904,22 @@ export async function updateJiraIssueAssignee(
     }
   }
 
-  await updateJiraIssueAssigneeWithWebForm(jiraServerUrl, issueId, issueKey, normalizedAssignee || null);
+  // Web-form creation returns a key but no id; Quick Edit requires the numeric id.
+  let resolvedIssueId = issueId;
+
+  if (!resolvedIssueId) {
+    const issue = await jiraFetch<{ id?: string }>(
+      jiraServerUrl,
+      `/rest/api/2/issue/${encodeURIComponent(issueKey)}?fields=assignee`
+    );
+    resolvedIssueId = issue?.id ?? "";
+
+    if (!resolvedIssueId) {
+      throw new Error("未能读取子任务 id，无法通过 Quick Edit 更新经办人。");
+    }
+  }
+
+  await updateJiraIssueAssigneeWithWebForm(jiraServerUrl, resolvedIssueId, issueKey, normalizedAssignee || null);
 
   const currentAssignee = await fetchIssueAssigneeName(jiraServerUrl, issueKey);
   const expectedAssignee = normalizedAssignee.toLowerCase();

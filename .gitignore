@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.build-counter.json
 .DS_Store
 *.log
 *.local
