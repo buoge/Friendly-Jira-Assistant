@@ -3,6 +3,7 @@ import {
   createJiraSubtaskWithWebForm,
   fetchBoardSprintIssueGroups,
   fetchIssueStoryContext,
+  fetchIssueForSubtaskCreation,
   fetchJiraProjects,
   getCachedStoryPointsFieldId,
   fetchProjectBoards,
@@ -174,6 +175,28 @@ let storyBoardOptionItems: Array<{ value: string; label: string }> = [];
 let pendingFocusIssueKey: string | null = null;
 
 async function loadSettings() {
+  const embedded = new URLSearchParams(location.search);
+  const issueKey = embedded.get("issue");
+  const server = embedded.get("server");
+  if (issueKey && server && validateJiraServerUrl(server).ok) {
+    document.body.classList.add("embedded-manager");
+    renderJiraUrl(server);
+    activateView("story-subtasks");
+    try {
+      await getJiraAssignees();
+      const issue = await fetchIssueForSubtaskCreation(server, issueKey);
+      const subtasks = await Promise.all((issue.fields.subtasks ?? []).map(task => fetchIssueForSubtaskCreation(server, task.key)));
+      const row = createIssueElement({ ...issue, subtasks });
+      storyIssuesList?.replaceChildren(row);
+      row.querySelector<HTMLButtonElement>(".issue-row__header")?.click();
+      row.querySelector<HTMLButtonElement>(".issue-row__preview-toggle")?.click();
+      setStoryIssuesCount(`${issueKey} · ${subtasks.length} 个子任务`);
+    } catch (error) {
+      setStoryIssuesCount(`加载失败：${error instanceof Error ? error.message : String(error)}。请关闭后重试。`);
+    }
+    return;
+  }
+
   const {
     [storageKey]: jiraServerUrl = "",
     [profileStorageKey]: jiraProfile,

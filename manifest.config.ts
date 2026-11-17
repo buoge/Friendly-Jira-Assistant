@@ -20,9 +20,10 @@ export default defineManifest({
     service_worker: "src/background/index.ts",
     type: "module"
   },
+  web_accessible_resources: [{ resources: ["src/popup/index.html"], matches: ["https://*.atlassian.net/*", "https://pm.glodon.com/*"] }],
   content_scripts: [
     {
-      matches: ["https://*.atlassian.net/*"],
+      matches: ["https://*.atlassian.net/*", "https://pm.glodon.com/newjira/*"],
       js: ["src/content/index.ts"],
       run_at: "document_idle"
     }

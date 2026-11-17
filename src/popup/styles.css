@@ -1889,3 +1889,12 @@ body.app-dialog-open {
 .template-apply-table__error[hidden] {
   display: none;
 }
+
+.embedded-manager { min-width: 0; }
+.embedded-manager .topbar,
+.embedded-manager .sidebar,
+.embedded-manager .filter-panel,
+.embedded-manager .content__heading { display: none; }
+.embedded-manager .app-shell { width: 100%; max-width: none; margin: 0; padding: 0; }
+.embedded-manager .workspace { display: block; }
+.embedded-manager .content { padding: 12px; }
